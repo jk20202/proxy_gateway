@@ -1,0 +1,208 @@
+package auth
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"strings"
+	"sync"
+
+	"proxy-pool/internal/config"
+)
+
+// NewToken generates a random API token for accounts that do not provide one.
+func NewToken() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Account is a runtime view of an internal user.
+type Account struct {
+	Name     string
+	Password string
+	Token    string
+	Role     string
+	Enabled  bool
+	Groups   []string
+}
+
+// IsAdmin reports whether the account has the admin role.
+func (a *Account) IsAdmin() bool {
+	return a.Role == "admin"
+}
+
+// CanUseGroup reports whether the account may consume proxies from the group.
+// Empty Groups means all groups are allowed.
+func (a *Account) CanUseGroup(group string) bool {
+	if len(a.Groups) == 0 {
+		return true
+	}
+	for _, g := range a.Groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// Manager validates web logins and API tokens against configured accounts.
+type Manager struct {
+	mu      sync.RWMutex
+	byName  map[string]*Account
+	byToken map[string]*Account
+}
+
+// New builds an account manager from the given account configs.
+func New(cfgs []config.AccountCfg) *Manager {
+	m := &Manager{
+		byName:  make(map[string]*Account, len(cfgs)),
+		byToken: make(map[string]*Account, len(cfgs)),
+	}
+	for _, c := range cfgs {
+		acct := &Account{
+			Name:     c.Name,
+			Password: c.Password,
+			Token:    c.Token,
+			Role:     c.Role,
+			Enabled:  c.Enabled,
+			Groups:   c.Groups,
+		}
+		if acct.Role == "" {
+			acct.Role = "user"
+		}
+		m.byName[acct.Name] = acct
+		if acct.Token != "" {
+			m.byToken[acct.Token] = acct
+		}
+	}
+	return m
+}
+
+// Empty reports whether no accounts are configured (auth disabled).
+func (m *Manager) Empty() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.byName) == 0
+}
+
+// Login authenticates by name+password and returns the account's API token.
+func (m *Manager) Login(name, password string) (*Account, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	acct := m.byName[name]
+	if acct == nil || !acct.Enabled {
+		return nil, false
+	}
+	if subtle.ConstantTimeCompare([]byte(acct.Password), []byte(password)) != 1 {
+		return nil, false
+	}
+	return acct, true
+}
+
+// ByToken resolves an account from an API token.
+func (m *Manager) ByToken(token string) (*Account, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	acct := m.byToken[token]
+	if acct == nil || !acct.Enabled {
+		return nil, false
+	}
+	return acct, true
+}
+
+// List returns all accounts (password omitted).
+func (m *Manager) List() []config.AccountCfg {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]config.AccountCfg, 0, len(m.byName))
+	for _, a := range m.byName {
+		out = append(out, config.AccountCfg{
+			Name: a.Name, Password: "", Token: a.Token, Role: a.Role, Enabled: a.Enabled, Groups: a.Groups,
+		})
+	}
+	return out
+}
+
+// AddAccount inserts or replaces an account dynamically. When the token is
+// empty a random one is generated so callers never control the token.
+func (m *Manager) AddAccount(c config.AccountCfg) error {
+	if strings.TrimSpace(c.Name) == "" {
+		return &ConfigError{"name is required"}
+	}
+	if c.Role == "" {
+		c.Role = "user"
+	}
+	if c.Role != "admin" && c.Role != "user" {
+		return &ConfigError{"role must be admin or user"}
+	}
+	if strings.TrimSpace(c.Token) == "" {
+		c.Token = NewToken()
+	}
+	acct := &Account{
+		Name: c.Name, Password: c.Password, Token: c.Token, Role: c.Role, Enabled: c.Enabled, Groups: c.Groups,
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// remove any previous token mapping for this account
+	if old := m.byName[c.Name]; old != nil && old.Token != "" {
+		delete(m.byToken, old.Token)
+	}
+	m.byToken[c.Token] = acct
+	m.byName[c.Name] = acct
+	return nil
+}
+
+// UpdateAccount applies a partial update to an existing account. The token is
+// regenerated automatically when an empty token is provided. Password is kept
+// unchanged when empty, and Groups is kept unchanged when nil (empty slice
+// clears the group restriction).
+func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acct := m.byName[name]
+	if acct == nil {
+		return &ConfigError{"account not found"}
+	}
+	if c.Role != "" {
+		if c.Role != "admin" && c.Role != "user" {
+			return &ConfigError{"role must be admin or user"}
+		}
+		acct.Role = c.Role
+	}
+	if c.Password != "" {
+		acct.Password = c.Password
+	}
+	if c.Groups != nil {
+		acct.Groups = c.Groups
+	}
+	acct.Enabled = c.Enabled
+	if c.Token != "" {
+		if old := acct.Token; old != "" {
+			delete(m.byToken, old)
+		}
+		acct.Token = c.Token
+		m.byToken[c.Token] = acct
+	}
+	return nil
+}
+
+// RemoveAccount deletes an account.
+func (m *Manager) RemoveAccount(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acct := m.byName[name]
+	if acct == nil {
+		return &ConfigError{"account not found"}
+	}
+	if acct.Token != "" {
+		delete(m.byToken, acct.Token)
+	}
+	delete(m.byName, name)
+	return nil
+}
+
+// ConfigError is a validation error returned by the account manager.
+type ConfigError struct{ msg string }
+
+func (e *ConfigError) Error() string { return e.msg }

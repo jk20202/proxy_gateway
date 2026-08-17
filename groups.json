@@ -1,0 +1,37 @@
+[
+  {
+    "name": "residential",
+    "type": "static",
+    "min_alive_ratio": 0.5,
+    "primary": [
+      "mock-sticky",
+      "mock-ippool"
+    ],
+    "primary_weights": null,
+    "backups": [
+      {
+        "name": "fallback-tunnel",
+        "min_alive_ratio": 0,
+        "providers": [
+          "mock-tunnel"
+        ]
+      }
+    ],
+    "regions": null,
+    "username": "residential",
+    "password": "residential-pass"
+  },
+  {
+    "name": "test",
+    "type": "free",
+    "min_alive_ratio": 0,
+    "primary": [
+      "charlespikachu-free"
+    ],
+    "primary_weights": null,
+    "backups": [],
+    "regions": null,
+    "username": "test",
+    "password": "test"
+  }
+]

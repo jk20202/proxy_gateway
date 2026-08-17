@@ -1,0 +1,2564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy Pool 管理控制台</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --panel2: #334155;
+  --border: #475569;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --blue: #3b82f6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+.header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.header h1 { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.header h1 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); display: inline-block; }
+.header .stats { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
+.header .stats b { color: var(--text); font-size: 15px; }
+.actions { display: flex; gap: 8px; }
+.btn {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all .15s;
+}
+.btn:hover { background: var(--border); }
+.btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-danger { background: transparent; border-color: var(--red); color: var(--red); }
+.btn-danger:hover { background: var(--red); color: #fff; }
+.btn-sm { padding: 3px 8px; font-size: 12px; }
+.btn-green { background: transparent; border-color: var(--green); color: var(--green); }
+.btn-green:hover { background: var(--green); color: #fff; }
+main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+.card h2 { font-size: 15px; margin-bottom: 14px; color: var(--text); display: flex; align-items: center; justify-content: space-between; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.metric .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.metric .value { font-size: 26px; font-weight: 700; }
+.metric .value.green { color: var(--green); }
+.metric .value.red { color: var(--red); }
+.metric .value.amber { color: var(--amber); }
+.metric .value.blue { color: var(--blue); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+td.mono { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge.on { background: rgba(34,197,94,.15); color: var(--green); }
+.badge.off { background: rgba(239,68,68,.15); color: var(--red); }
+.badge.kind { background: rgba(59,130,246,.15); color: var(--blue); }
+.badge.tunnel { background: rgba(245,158,11,.15); color: var(--amber); }
+.latency-bar { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.latency-bar .track { flex: 1; height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.latency-bar .fill { height: 100%; border-radius: 999px; transition: width .3s; }
+.latency-bar .val { font-size: 11px; font-weight: 600; color: var(--text); min-width: 44px; text-align: right; }
+.latency-bar .val.slow { color: var(--red); }
+.latency-bar .val.mid { color: var(--amber); }
+.group-gw { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 4px 0 10px; flex-wrap: wrap; }
+.group-gw .gw-label { color: var(--blue); font-weight: 600; }
+.group-gw code { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--text); }
+.group-gw.muted { color: var(--muted); margin: 4px 0 10px; font-size: 12px; }
+.group-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.group-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.group-name { font-weight: 700; font-size: 15px; }
+.group-actions { margin-left: auto; display: flex; gap: 6px; }
+.group-table th, .group-table td { padding: 8px 10px; }
+.group-table .col-tier { width: 190px; }
+.group-table .col-num { width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+.group-table .col-status { width: 96px; text-align: center; }
+.group-table .col-providers { min-width: 200px; }
+.proxies-table th, .proxies-table td { padding: 8px 10px; }
+.proxies-table .px-addr { width: 200px; }
+.proxies-table .px-kind { width: 110px; }
+.proxies-table .px-country { width: 110px; }
+.proxies-table .px-prov { width: 180px; }
+.proxies-table .px-status { width: 80px; }
+.proxies-table .px-lat { width: 170px; }
+.proxies-table .px-weight { width: 60px; text-align: right; font-variant-numeric: tabular-nums; }
+.proxies-table .px-ops { width: 90px; }
+.apidoc-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.apidoc-toolbar h2 { margin: 0; font-size: 16px; flex-shrink: 0; }
+.apidoc-toolbar .apidoc-filter { flex: 1; max-width: 360px; }
+.apidoc-toolbar .apidoc-filter input { margin-bottom: 0; }
+.apidoc-block pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; overflow-x: auto; margin: 6px 0 14px; color: var(--text); }
+code { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+.apidoc-row:hover { background: var(--panel2); }
+.code-block { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.7; overflow-x: auto; margin: 0; color: var(--text); font-family: "SF Mono", Consolas, monospace; }
+.lang-tabs { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.lang-tab { padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.lang-tab.active { background: rgba(59,130,246,.15); color: var(--blue); border-color: var(--blue); }
+.apidoc-layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+.apidoc-left { position: sticky; top: 8px; }
+.apidoc-filter input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 8px; }
+.apidoc-menu { max-height: calc(100vh - 220px); overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.apidoc-item { display: flex; gap: 10px; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--border); align-items: baseline; }
+.apidoc-item:last-child { border-bottom: none; }
+.apidoc-item:hover { background: var(--panel2); }
+.apidoc-item.active { background: rgba(59,130,246,.12); border-left: 3px solid var(--blue); }
+.apidoc-item .m { font-family: "SF Mono", Consolas, monospace; font-weight: 700; font-size: 12px; flex-shrink: 0; width: 54px; }
+.apidoc-item .meta { flex: 1; min-width: 0; }
+.apidoc-item .path { font-family: "SF Mono", Consolas, monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+.apidoc-item .desc { font-size: 11px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apidoc-item .method-get { color: var(--green); }
+.apidoc-item .method-post { color: var(--amber); }
+.apidoc-item .method-put { color: var(--blue); }
+.apidoc-item .method-delete { color: var(--red); }
+.apidoc-right { min-width: 0; }
+.apidoc-placeholder { color: var(--muted); font-size: 13px; text-align: center; padding: 80px 20px; border: 1px dashed var(--border); border-radius: 10px; }
+.apidoc-right .card { padding: 20px; }
+.apidoc-section { margin-bottom: 18px; }
+.apidoc-section h3 { font-size: 14px; margin-bottom: 8px; color: var(--text); border-left: 3px solid var(--blue); padding-left: 8px; }
+.apidoc-section table { margin-top: 6px; }
+.apidoc-section table td { font-size: 12px; vertical-align: top; }
+.apidoc-section table td code { white-space: nowrap; }
+.toggle { position: relative; width: 38px; height: 20px; display: inline-block; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--border); border-radius: 999px; transition: .2s;
+}
+.toggle .slider:before {
+  content: ""; position: absolute; height: 14px; width: 14px;
+  left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s;
+}
+.toggle input:checked + .slider { background: var(--green); }
+.toggle input:checked + .slider:before { transform: translateX(18px); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab {
+  padding: 8px 16px; cursor: pointer; color: var(--muted);
+  border-bottom: 2px solid transparent; font-size: 13px;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--blue); font-weight: 600; }
+.view { display: none; }
+.view.active { display: block; }
+.pagination { display: flex; align-items: center; gap: 10px; justify-content: flex-end; color: var(--muted); font-size: 12px; }
+.pagination button { background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 3px 10px; border-radius: 5px; cursor: pointer; }
+.weight-input { width: 70px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 4px; font-size: 12px; }
+.empty { text-align: center; color: var(--muted); padding: 40px 0; }
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: none; align-items: center; justify-content: center; z-index: 100;
+}
+.modal-backdrop.show { display: flex; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  width: 560px; max-width: 92vw; max-height: 88vh; overflow: auto; padding: 24px;
+}
+.modal h3 { margin-bottom: 16px; font-size: 16px; }
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+.form-row input, .form-row select {
+  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px;
+}
+.form-row textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; min-height: 60px; font-size: 12px; font-family: monospace; }
+.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+.chk { display: inline-flex; align-items: center; gap: 4px; margin: 2px 10px 2px 0; color: var(--text); font-size: 12px; }
+.chk input { width: auto; }
+.provider-pick { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.provider-pick label { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--text); font-size: 12px; }
+.provider-pick label input { width: auto; }
+.backup-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: var(--bg); }
+.backup-row .br-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.backup-row .br-head input { width: 160px; }
+.backup-row .br-head .br-ratio { width: 110px; }
+.backup-row .br-note { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.bk-pick { position: relative; }
+.bk-pick .bk-trigger {
+  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2); color: var(--text); font-size: 12px; cursor: pointer; width: 100%;
+}
+.bk-pick .bk-trigger:hover { border-color: var(--blue); }
+.bk-pick .bk-trigger .bk-empty { color: var(--muted); }
+.bk-pick .bk-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.bk-pick .bk-tag {
+  background: rgba(59,130,246,.14); color: var(--blue); border: 1px solid rgba(59,130,246,.4);
+  border-radius: 6px; padding: 1px 7px; font-size: 11px;
+}
+.bk-pick .bk-caret { color: var(--muted); margin-left: auto; }
+.bk-pick .bk-panel {
+  display: none; position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.bk-pick.open .bk-panel { display: block; }
+.bk-pick .bk-opt {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--text);
+}
+.bk-pick .bk-opt:hover { background: rgba(59,130,246,.08); }
+.bk-pick .bk-opt input { width: auto; margin: 0; }
+.bk-pick .bk-opt .bk-name { font-weight: 600; }
+.bk-pick .bk-opt .bk-meta { margin-left: auto; color: var(--muted); font-size: 11px; text-align: right; }
+/* ---- 分组弹窗：区块化布局 ---- */
+.gs-block { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg); }
+.gs-block > .gs-title { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; letter-spacing: .03em; display: flex; align-items: center; justify-content: space-between; }
+.gs-row { display: flex; gap: 14px; flex-wrap: wrap; }
+.gs-row > .gs-field { flex: 1; min-width: 150px; }
+.gs-field label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.gs-field input, .gs-field select { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px; }
+.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.prov-card {
+  position: relative; display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2); cursor: pointer; transition: all .15s; user-select: none;
+}
+.prov-card:hover { border-color: var(--blue); }
+.prov-card input { position: absolute; opacity: 0; width: 0; height: 0; }
+.prov-card .pc-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prov-card .pc-count { font-size: 11px; color: var(--muted); }
+.prov-card .pc-region { font-size: 10px; color: var(--muted); }
+.prov-card.on { border-color: var(--blue); background: rgba(59,130,246,.14); box-shadow: inset 0 0 0 1px var(--blue); }
+.prov-card.on .pc-name { color: var(--blue); }
+.region-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.region-pill {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel2); cursor: pointer; font-size: 12px; color: var(--text);
+  transition: all .15s; user-select: none;
+}
+.region-pill:hover { border-color: var(--green); }
+.region-pill input { position: absolute; opacity: 0; width: 0; height: 0; }
+.region-pill.on { border-color: var(--green); background: rgba(34,197,94,.14); color: var(--green); }
+.region-pill.on input { accent-color: var(--green); }
+#g-region-countries { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+#g-region-countries .region-pill { padding: 5px 11px; font-size: 11px; }
+.toast {
+  position: fixed; top: 20px; right: 20px; z-index: 200;
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  padding: 12px 18px; border-radius: 8px; display: none; max-width: 360px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.3);
+}
+.toast.show { display: block; animation: fadein .2s; }
+.toast.error { border-color: var(--red); }
+@keyframes fadein { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; } }
+.search { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 12px; border-radius: 6px; font-size: 13px; width: 240px; }
+.refresh-hint { color: var(--muted); font-size: 12px; margin-left: 8px; }
+tr.dead-row td { opacity: .5; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1><span class="dot"></span> Proxy Pool 管理控制台</h1>
+  <div class="stats">
+    <span>总代理 <b id="stat-total">-</b></span>
+    <span>存活 <b id="stat-alive">-</b></span>
+    <span>Provider <b id="stat-providers">-</b></span>
+    <span>API <b id="stat-api" class="green">-</b></span>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="runHealthCheck()">立即健康检查</button>
+    <button class="btn btn-primary" onclick="openAddProvider()">+ 添加 Provider</button>
+  </div>
+</div>
+
+<main>
+  <div class="metrics">
+    <div class="metric"><div class="label">代理总数</div><div class="value blue" id="m-total">-</div></div>
+    <div class="metric"><div class="label">存活代理</div><div class="value green" id="m-alive">-</div></div>
+    <div class="metric"><div class="label">已启用 Provider</div><div class="value amber" id="m-enabled">-</div></div>
+    <div class="metric"><div class="label">隧道型 Provider</div><div class="value" id="m-tunnel">-</div></div>
+    <div class="metric"><div class="label">IP池型 Provider</div><div class="value" id="m-ippool">-</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-view="providers" data-admin="1" onclick="switchView('providers')">Provider 管理</div>
+    <div class="tab" data-view="proxies" data-admin="1" onclick="switchView('proxies')">代理列表</div>
+    <div class="tab" data-view="groups" data-admin="1" onclick="switchView('groups')">调度分组</div>
+    <div class="tab" data-view="accounts" data-admin="1" onclick="switchView('accounts')">账户管理</div>
+    <div class="tab" data-view="usage" data-admin="1" onclick="switchView('usage')">调用统计</div>
+    <div class="tab" data-view="alerts" data-admin="1" onclick="switchView('alerts')">告警配置</div>
+    <div class="tab" data-view="apidoc" onclick="switchView('apidoc')">API 文档</div>
+  </div>
+
+  <div class="view active" id="view-providers">
+    <div class="card">
+      <h2>代理平台（Provider）列表 <span class="refresh-hint">自动刷新中</span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th><th>类型</th><th>启用</th><th>检测频率</th>
+            <th>代理 (存活/总数)</th><th>地区分布</th><th>最近状态</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="provider-tbody"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="view" id="view-proxies">
+    <div class="card">
+      <h2>
+        代理明细
+        <span style="display:flex;gap:8px;align-items:center;">
+          <input class="search" id="proxy-search" placeholder="搜索 IP / Provider..." oninput="renderProxies()">
+          <label class="toggle" style="margin:0;" title="自动刷新开关">
+            <input type="checkbox" id="proxy-autorefresh" checked onchange="toggleProxyAutoRefresh(this.checked)">
+            <span class="slider"></span>
+          </label>
+          <span class="refresh-hint" id="proxy-autorefresh-label">自动刷新</span>
+        </span>
+      </h2>
+      <table class="proxies-table">
+        <thead>
+          <tr>
+            <th class="px-addr">地址</th><th class="px-kind">类型</th><th class="px-country">地区</th><th class="px-prov">Provider</th><th class="px-status">状态</th>
+            <th class="px-lat">延迟</th><th class="px-weight">权重</th><th class="px-ops">操作</th>
+          </tr>
+        </thead>
+        <tbody id="proxy-tbody"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody>
+      </table>
+      <div class="pagination" id="proxy-pagination"></div>
+    </div>
+  </div>
+
+  <div class="view" id="view-groups">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        <h2 style="margin:0;">调度分组 <span class="refresh-hint">主池存活率跌破阈值时自动切备用池；配置网关用户名/密码后，直接使用 用户名:密码@域名:10000 作为代理地址</span></h2>
+        <button class="btn btn-primary" onclick="openGroupModal()">新增分组</button>
+      </div>
+      <div id="groups-container"><div class="empty">加载中...</div></div>
+    </div>
+  </div>
+
+  <div class="view" id="view-accounts">
+    <div class="card">
+      <h2>账户列表 <span class="refresh-hint">密码仅用于 Web 登录；Token 由系统自动生成用于 API 调用</span></h2>
+      <table>
+        <thead><tr><th>名称</th><th>角色</th><th>Token</th><th>可用分组</th><th>启用</th><th>操作</th></tr></thead>
+        <tbody id="account-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
+      </table>
+      <div class="form-row" style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn btn-primary" onclick="openAccountModal('')">新增账户</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-usage">
+    <div class="card">
+      <h2>按账户调用统计</h2>
+      <table>
+        <thead><tr><th>账户</th><th>调用次数</th><th>成功</th><th>成功率</th></tr></thead>
+        <tbody id="usage-tbody"><tr><td colspan="4" class="empty">加载中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="view" id="view-alerts">
+    <div class="card">
+      <h2>Webhook 通知</h2>
+      <p class="hint">事件发生时，向以下 URL 发送 HTTP POST JSON。密钥（Secret）会作为 <code>X-Webhook-Secret</code> 请求头发送，用于接收端校验签名。备注用于区分每个 webhook 的用途。留空 events 表示接收全部事件。</p>
+      <table>
+        <thead>
+          <tr><th>备注</th><th>URL</th><th>密钥 (Secret)</th><th>事件</th><th>操作</th></tr>
+        </thead>
+        <tbody id="alert-webhook-tbody"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
+      </table>
+      <div class="form-row">
+        <input id="a-wh-remark" placeholder="备注（如：钉钉告警群）" style="flex:1;">
+        <input id="a-wh-url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx" style="flex:2;">
+        <input id="a-wh-secret" placeholder="校验密钥 Secret（可空）" style="flex:1;">
+        <input id="a-wh-events" placeholder="事件，逗号分隔，留空=全部 (provider_down,provider_recovered,pool_exhausted,refresh_failed)" style="flex:3;">
+        <button class="btn primary" onclick="addWebhook()">添加 Webhook</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>邮件通知</h2>
+      <p class="hint">密码留空表示保留当前密码；填了会覆盖。</p>
+      <div class="form-row">
+        <label>SMTP 服务器</label>
+        <input id="a-smtp-host" placeholder="smtp.example.com">
+        <label>端口</label>
+        <input id="a-smtp-port" type="number" value="587" style="width:90px;">
+      </div>
+      <div class="form-row">
+        <label>用户名</label>
+        <input id="a-smtp-user">
+        <label>密码</label>
+        <input id="a-smtp-pass" type="password">
+      </div>
+      <div class="form-row">
+        <label>发件人 (from)</label>
+        <input id="a-smtp-from" placeholder="alert@example.com">
+        <label>收件人 (to，逗号分隔)</label>
+        <input id="a-smtp-to" placeholder="ops@example.com, oncall@example.com" style="flex:2;">
+      </div>
+      <div class="form-row">
+        <label>事件 (逗号分隔，留空=全部)</label>
+        <input id="a-smtp-events" placeholder="provider_down,provider_recovered" style="flex:2;">
+        <label style="display:flex;align-items:center;gap:6px;width:auto;">
+          <input type="checkbox" id="a-smtp-tls"> 直连 TLS (465 端口)
+        </label>
+      </div>
+      <div class="form-row">
+        <button class="btn primary" onclick="saveEmail()">保存邮件配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>去重与监控</h2>
+      <div class="form-row">
+        <label>去重窗口 dedup_seconds（同一事件此秒数内只发一次，默认 300）</label>
+        <input id="a-dedup" type="number" value="300" style="width:120px;">
+        <button class="btn primary" onclick="saveDedup()">保存</button>
+      </div>
+      <div class="form-row">
+        <label>Provider 状态监控间隔 monitor_interval_s（检测 provider 存活率，默认 15）</label>
+        <input id="a-monitor" type="number" value="15" style="width:120px;">
+        <button class="btn primary" onclick="saveMonitor()">保存</button>
+      </div>
+      <div class="form-row">
+        <label>故障恢复自检间隔 recover_interval_s（provider 掉线后每隔此秒数强制刷新尝试恢复，0=关闭，默认 3600）</label>
+        <input id="a-recover" type="number" value="3600" style="width:120px;">
+        <button class="btn primary" onclick="saveRecover()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-apidoc">
+    <div class="apidoc-toolbar">
+      <h2>API 接口</h2>
+      <div class="apidoc-filter">
+        <input id="apidoc-search" placeholder="搜索接口 / 路径 / 说明..." oninput="renderAPIDocList()">
+      </div>
+    </div>
+    <div class="apidoc-layout">
+      <div class="apidoc-left" id="apidoc-list">
+        <div class="apidoc-menu" id="apidoc-menu"></div>
+      </div>
+
+      <div class="apidoc-right" id="apidoc-detail">
+        <div class="apidoc-placeholder" id="apidoc-placeholder">
+          ← 从左侧选择一个接口，此处展示调用案例、参数与响应说明
+        </div>
+        <div id="apidoc-detail-body" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="provider-modal">
+  <div class="modal">
+    <h3 id="provider-modal-title">添加 Provider</h3>
+    <div class="form-row">
+      <label>名称 (唯一)</label>
+      <input id="p-name" placeholder="例如 my-tunnel-01">
+    </div>
+    <div class="form-row">
+      <label>类型</label>
+      <select id="p-type" onchange="toggleTunnelFields()">
+        <option value="tunnel">tunnel（动态隧道型，平台自动轮换出口 IP）</option>
+        <option value="ip_pool">ip_pool（动态提取型，从 API 拉取 IP 列表）</option>
+        <option value="sticky">sticky（长效静态型，粘性会话，时效内同客户端固定同一 IP）</option>
+        <option value="free">free（免费源，自动采集公共免费列表，延迟达标才入池）</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>检测频率 check_interval_s（秒，0=全局默认。池内 IP 多久检测一次延迟）</label>
+      <input id="p-check-interval" type="number" min="0" value="0" placeholder="0 = 用全局 health_check.interval_s">
+    </div>
+    <div class="form-row">
+      <label>存活率阈值 min_alive_ratio (0~1，默认 0。主 provider 存活率跌破此值才启用兜底，如 0.1 = 90% 失效才用备用)</label>
+      <input id="p-min-ratio" type="number" step="0.01" min="0" max="1" value="0" placeholder="0 表示只要有存活就用，0.1 表示 90% 失效才降级">
+    </div>
+    <div class="form-row" id="p-sticky-row" style="display:none;">
+      <label>粘性时长 sticky_seconds (sticky 类型必填；同客户端在此秒数内复用同一代理，如 60 / 300)</label>
+      <input id="p-sticky-seconds" type="number" min="0" value="60" placeholder="60 = 1 分钟，300 = 5 分钟">
+    </div>
+
+    <div id="tunnel-fields">
+      <div class="form-row">
+        <label>隧道网关地址 (host)</label>
+        <input id="p-tunnel-gateway" placeholder="tunnel.proxy.example.com">
+      </div>
+      <div class="form-row">
+        <label>端口</label>
+        <input id="p-tunnel-port" type="number" value="8080">
+      </div>
+      <div class="form-row">
+        <label>协议</label>
+        <select id="p-tunnel-scheme">
+          <option value="http">http</option>
+          <option value="https">https</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>用户名（可空）</label>
+        <input id="p-tunnel-user">
+      </div>
+      <div class="form-row">
+        <label>密码（可空）</label>
+        <input id="p-tunnel-pass">
+      </div>
+    </div>
+
+    <div id="ippool-fields" style="display:none;">
+      <div class="form-row">
+        <label>提取 API URL</label>
+        <input id="p-extract-url" placeholder="https://api.proxycn.com/get">
+      </div>
+      <div class="form-row">
+        <label>返回格式</label>
+        <select id="p-format">
+          <option value="text">text（每行 ip:port）</option>
+          <option value="json">json（常见 JSON 结构）</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>刷新间隔（秒）</label>
+        <input id="p-refresh" type="number" value="60">
+      </div>
+      <div class="form-row">
+        <label>过期时间（秒）</label>
+        <input id="p-expire" type="number" value="600">
+      </div>
+      <div class="form-row">
+        <label>用户名（Basic Auth，可空）</label>
+        <input id="p-extract-user">
+      </div>
+      <div class="form-row">
+        <label>密码（可空）</label>
+        <input id="p-extract-pass">
+      </div>
+    </div>
+
+    <div id="free-fields" style="display:none;">
+      <div class="form-row">
+        <label>免费源 feed_url（返回 JSON 的免费代理列表地址）</label>
+        <input id="p-free-feed" placeholder="https://example.com/proxies.json">
+      </div>
+      <div class="form-row">
+        <label>刷新采集间隔（秒）</label>
+        <input id="p-free-refresh" type="number" value="600">
+      </div>
+      <div class="form-row">
+        <label>最大采集延迟 max_speed_ms（源站上报延迟超过此值不采集，默认 3000）</label>
+        <input id="p-free-max-speed" type="number" value="3000">
+      </div>
+      <div class="form-row">
+        <label>删除延迟阈值 delete_latency_ms（健康检测延迟超过此值直接删除，默认 3000）</label>
+        <input id="p-free-delete-latency" type="number" value="3000">
+      </div>
+      <div class="form-row">
+        <label>过期时间（秒，0=不过期，默认 0）</label>
+        <input id="p-free-expire" type="number" value="0">
+      </div>
+      <div class="form-row">
+        <label>采集上限 max_proxies（0=不限量，默认 0）</label>
+        <input id="p-free-max-proxies" type="number" value="0">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>健康检查 URL（可空，默认全局）</label>
+      <input id="p-check-url" placeholder="http://httpbin.org/ip">
+    </div>
+    <div class="form-row">
+      <label>国家/地区（ISO 代码，如 CN/US/HK；可空=自动通过 IP 归属查询）</label>
+      <input id="p-country" placeholder="留空自动查询；显式指定则跳过查询">
+    </div>
+
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitProvider()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="group-modal">
+  <div class="modal" style="width:720px;">
+    <h3 id="group-modal-title">新增分组</h3>
+    <div class="gs-block">
+      <div class="gs-title">基本信息</div>
+      <div class="gs-row">
+        <div class="gs-field">
+          <label>名称（唯一）</label>
+          <input id="g-name" placeholder="例如 residential">
+        </div>
+        <div class="gs-field">
+          <label>类型</label>
+          <select id="g-type">
+            <option value="">默认</option>
+            <option value="static">static</option>
+            <option value="free">free</option>
+            <option value="tunnel">tunnel</option>
+            <option value="high-quality">high-quality</option>
+          </select>
+        </div>
+        <div class="gs-field">
+          <label>主池存活率阈值 min_alive_ratio</label>
+          <input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0">
+        </div>
+      </div>
+      <div class="gs-row" style="margin-top:12px;">
+        <div class="gs-field">
+          <label>网关用户名（配置后使用 用户名:密码@域名:10000）</label>
+          <input id="g-username" placeholder="可空">
+        </div>
+        <div class="gs-field">
+          <label>网关密码</label>
+          <input id="g-password" placeholder="可空">
+        </div>
+      </div>
+    </div>
+    <div class="gs-block">
+      <div class="gs-title">地区过滤 <span style="font-weight:400;color:var(--muted);letter-spacing:0;">可多选，空=不限。国内=中国内地，海外=其余（含中国香港 HK）；选海外后可进一步勾选具体国家</span></div>
+      <div class="region-pills" id="g-regions">
+        <label class="region-pill"><input type="checkbox" value="domestic" onchange="onRegionToggle()"> 国内 (CN)</label>
+        <label class="region-pill"><input type="checkbox" value="overseas" onchange="onRegionToggle()"> 海外</label>
+      </div>
+      <div id="g-region-countries" style="display:none;"></div>
+    </div>
+    <div class="gs-block">
+      <div class="gs-title">主池 Provider <span style="font-weight:400;color:var(--muted);letter-spacing:0;">可多选；勾选后可设置该 provider 在此分组的调度权重（缺省 1）</span></div>
+      <div class="provider-grid" id="g-primary-pick"></div>
+    </div>
+    <div class="gs-block">
+      <div class="gs-title">备用池 <span style="font-weight:400;color:var(--muted);letter-spacing:0;">按等级顺序，第一行最先使用，第一行不可用才切到第二行</span></div>
+      <div id="g-backup-rows"></div>
+      <button class="btn btn-sm" onclick="addBackupRow()" style="margin-top:6px;">+ 添加备用池</button>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeGroupModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitGroup()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="webhook-modal">
+  <div class="modal" style="width:620px;">
+    <h3 id="wh-modal-title">新增 Webhook</h3>
+    <div class="form-row">
+      <label>备注</label>
+      <input id="wh-remark" placeholder="例如：钉钉告警群 / 生产环境">
+    </div>
+    <div class="form-row">
+      <label>URL</label>
+      <input id="wh-url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx">
+    </div>
+    <div class="form-row">
+      <label>密钥 (Secret)</label>
+      <input id="wh-secret" placeholder="校验密钥 Secret（可空）">
+    </div>
+    <div class="form-row">
+      <label>事件（逗号分隔，留空=全部）</label>
+      <input id="wh-events" placeholder="provider_down,provider_recovered,pool_exhausted,refresh_failed">
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeWebhookModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveWebhook()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="acct-modal">
+  <div class="modal" style="width:520px;">
+    <h3 id="acct-modal-title">新增账户</h3>
+    <div class="form-row">
+      <label>账户名（唯一）</label>
+      <input id="acct-name" placeholder="例如 ops">
+    </div>
+    <div class="form-row">
+      <label>密码（用于 Web 登录）</label>
+      <input id="acct-pass" type="password" placeholder="编辑时留空=保持不变">
+    </div>
+    <div class="form-row">
+      <label>角色</label>
+      <select id="acct-role">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+      <label style="width:auto;min-width:0;display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="acct-enabled" checked> 启用
+      </label>
+    </div>
+    <div class="form-row">
+      <label>可用分组（逗号分隔，留空=全部）</label>
+      <input id="acct-groups" placeholder="residential, static">
+    </div>
+    <div class="hint" style="margin:8px 0;">API Token 由系统自动生成，添加后可在账户列表查看。</div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeAccountModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitAccount()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="login-modal">
+  <div class="modal" style="width:380px;">
+    <h3>登录</h3>
+    <div class="form-row">
+      <label>账户名</label>
+      <input id="login-name" autocomplete="username">
+    </div>
+    <div class="form-row">
+      <label>密码</label>
+      <input id="login-pass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+let state = { status: null, providers: [], proxies: [], proxyPage: 1, groups: [], accounts: [], usage: [] };
+let proxyAutoRefresh = true;
+const PAGE_SIZE = 20;
+let token = localStorage.getItem('pp_token') || '';
+let currentMe = null; // {name, role, groups, admin} from /auth/me
+
+function isAdmin() {
+  if (currentMe === null) return true; // auth disabled -> all endpoints open
+  return currentMe.admin;
+}
+
+function authHeaders() {
+  return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(opts.headers || {}) },
+    ...opts,
+  });
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch (e) {}
+  if (res.status === 401) {
+    // token invalid/expired -> prompt login
+    token = '';
+    localStorage.removeItem('pp_token');
+    showLogin();
+    const err = new Error(data.error || ('HTTP ' + res.status));
+    err.unauthorized = true;
+    throw err;
+  }
+  if (res.status === 403) {
+    const err = new Error(data.error || 'forbidden');
+    err.unauthorized = true;
+    throw err;
+  }
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function showLogin() {
+  document.getElementById('login-modal').classList.add('show');
+  document.getElementById('login-pass').value = '';
+  document.getElementById('login-name').focus();
+}
+
+function hideLogin() {
+  document.getElementById('login-modal').classList.remove('show');
+}
+
+async function doLogin() {
+  const name = document.getElementById('login-name').value.trim();
+  const password = document.getElementById('login-pass').value;
+  if (!name || !password) { toast('请输入账户和密码', true); return; }
+  try {
+    const data = await api('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ name, password }),
+    });
+    token = data.token;
+    localStorage.setItem('pp_token', token);
+    currentMe = { name: data.name, role: data.role, groups: data.groups, admin: data.admin };
+    hideLogin();
+    toast('登录成功：' + data.name);
+    refreshAll();
+  } catch (e) {
+    toast('登录失败: ' + e.message, true);
+  }
+}
+
+// auth probe: use /auth/me which works for any authenticated account (admin or
+// not) and returns the role, so the console can hide admin endpoints for
+// regular users. When auth is disabled the server answers with admin=true.
+async function initAuth() {
+  if (token) {
+    try {
+      const me = await api('/api/v1/auth/me', { method: 'GET' });
+      currentMe = me;
+      return;
+    } catch (e) {
+      if (!e.unauthorized) return; // auth disabled
+      // token invalid -> fall through to anonymous probe below
+      token = '';
+      localStorage.removeItem('pp_token');
+    }
+  }
+  try {
+    const r = await fetch(API + '/api/v1/auth/me', { method: 'GET' });
+    if (r.status === 401 || r.status === 403) {
+      showLogin();
+    } else if (r.ok) {
+      const me = await r.json();
+      currentMe = me;
+    }
+  } catch (e) { /* network issue: ignore */ }
+}
+
+function toast(msg, isError = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.className = 'toast', 3000);
+}
+
+async function loadStatus() {
+  try {
+    state.status = await api('/api/v1/status');
+    const s = state.status;
+    document.getElementById('stat-total').textContent = s.total;
+    document.getElementById('stat-alive').textContent = s.alive;
+    const provs = s.by_provider.providers || [];
+    document.getElementById('stat-providers').textContent = provs.length;
+    document.getElementById('m-total').textContent = s.total;
+    document.getElementById('m-alive').textContent = s.alive;
+    let enabled = 0, tunnel = 0, ippool = 0;
+    provs.forEach(p => { if (p.enabled) enabled++; if (p.type === 'tunnel') tunnel++; else ippool++; });
+    document.getElementById('m-enabled').textContent = enabled;
+    document.getElementById('m-tunnel').textContent = tunnel;
+    document.getElementById('m-ippool').textContent = ippool;
+    document.getElementById('stat-api').textContent = '正常';
+    document.getElementById('stat-api').className = 'green';
+  } catch (e) {
+    document.getElementById('stat-api').textContent = '异常';
+    document.getElementById('stat-api').className = 'red';
+  }
+}
+
+async function loadProviders() {
+  try {
+    const data = await api('/api/v1/admin/providers');
+    state.providers = data.providers || [];
+    renderProviders();
+  } catch (e) { toast('加载 Provider 失败: ' + e.message, true); }
+}
+
+function renderProviders() {
+  const tb = document.getElementById('provider-tbody');
+  if (!state.providers.length) {
+    tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击右上角「添加 Provider」</td></tr>';
+    return;
+  }
+  // Stable order regardless of API response order: enabled first, grouped by
+  // type, then by name. Numbers update in place without reordering the rows.
+  const ordered = state.providers.slice().sort((a, b) => {
+    if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
+    if ((a.type || '') !== (b.type || '')) return (a.type || '').localeCompare(b.type || '');
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  tb.innerHTML = ordered.map(p => `
+    <tr>
+      <td class="mono"><b>${esc(p.name)}</b></td>
+      <td><span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}">${p.type}</span>${p.sticky_seconds ? `<span class="badge on" style="margin-left:4px;">粘性${p.sticky_seconds}s</span>` : ''}</td>
+      <td>
+        <label class="toggle">
+          <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="toggleProvider('${esc(p.name)}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </td>
+      <td>
+        ${p.check_interval_s > 0 ? `<span>${p.check_interval_s}s</span>` : `<span style="color:var(--muted);">全局</span>`}
+        ${p.provider_type === 'free'
+          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">采集 ${((p.config?.free?.refresh_interval_s) || 0)}s · 删≥${((p.config?.free?.delete_latency_ms) || 3000)}ms</div>`
+          : ''}
+        ${p.provider_type === 'ip_pool' || p.provider_type === 'sticky'
+          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">提取 ${((p.config?.ip_pool?.refresh_interval_s) || 0)}s</div>`
+          : ''}
+        ${p.min_alive_ratio > 0 ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">存活率≥${p.min_alive_ratio * 100}%才用</div>` : ''}
+      </td>
+      <td class="mono"><b style="color:var(--green)">${p.alive}</b> / ${p.total}</td>
+      <td><span class="badge ${regionBadgeClass(p)}">${esc(providerRegionLabel(p.countries))}</span></td>
+      <td>
+        ${p.last_err ? `<span class="badge off">${esc(p.last_err)}</span>` : `<span class="badge on">正常</span>`}
+      </td>
+      <td>
+        <button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
+        <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
+        <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function loadProxies() {
+  if (!proxyAutoRefresh) return;
+  try {
+    const data = await api('/api/v1/admin/proxies');
+    state.proxies = data.proxies || [];
+    renderProxies();
+  } catch (e) { toast('加载代理失败: ' + e.message, true); }
+}
+
+function toggleProxyAutoRefresh(on) {
+  proxyAutoRefresh = on;
+  document.getElementById('proxy-autorefresh-label').textContent = on ? '自动刷新' : '已暂停';
+  if (on) loadProxies();
+}
+
+function renderProxies() {
+  const q = (document.getElementById('proxy-search').value || '').trim().toLowerCase();
+  let filtered = q ? state.proxies.filter(p =>
+    p.addr.toLowerCase().includes(q) || p.provider.toLowerCase().includes(q) || (p.country || '').toLowerCase().includes(q)) : state.proxies.slice();
+  // Sort by latency ascending (fastest first); dead proxies sink to the bottom.
+  filtered.sort((a, b) => {
+    if (!!a.alive !== !!b.alive) return a.alive ? -1 : 1;
+    return (a.latency_ms || Infinity) - (b.latency_ms || Infinity);
+  });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  if (state.proxyPage > totalPages) state.proxyPage = totalPages;
+  const start = (state.proxyPage - 1) * PAGE_SIZE;
+  const page = filtered.slice(start, start + PAGE_SIZE);
+
+  const tb = document.getElementById('proxy-tbody');
+  if (!page.length) {
+    tb.innerHTML = '<tr><td colspan="8" class="empty">暂无代理</td></tr>';
+  } else {
+    tb.innerHTML = page.map(p => {
+      const country = p.country ? `${esc(countryName(p.country))}<span style="color:var(--muted);font-size:10px;"> (${esc(p.country)})</span>` : '<span style="color:var(--muted);">未知</span>';
+      const cls = p.country === 'CN' ? 'badge on' : (p.country && p.country !== 'unknown' ? 'badge kind' : 'badge off');
+      return `
+      <tr class="${p.alive ? '' : 'dead-row'}">
+        <td class="px-addr mono">${esc(p.addr)}</td>
+        <td class="px-kind"><span class="badge ${p.kind === 'tunnel' ? 'tunnel' : 'kind'}">${p.kind}${p.free ? ' · 免费' : ''}</span></td>
+        <td class="px-country"><span class="${cls}" style="font-size:11px;">${country}</span></td>
+        <td class="px-prov mono">${esc(p.provider)}</td>
+        <td class="px-status">${p.alive ? '<span class="badge on">存活</span>' : '<span class="badge off">失效</span>'}</td>
+        <td class="px-lat">${latencyBar(p.latency_ms, 3000)}</td>
+        <td class="px-weight">${p.weight}</td>
+        <td class="px-ops">
+          <button class="btn btn-sm btn-danger" data-id="${esc(p.id)}" onclick="removeProxy(this.dataset.id)">删除</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  document.getElementById('proxy-pagination').innerHTML = `
+    <span>共 ${filtered.length} 条 / ${totalPages} 页</span>
+    <button onclick="changePage(-1)" ${state.proxyPage <= 1 ? 'disabled' : ''}>上一页</button>
+    <button onclick="changePage(1)" ${state.proxyPage >= totalPages ? 'disabled' : ''}>下一页</button>`;
+}
+
+function changePage(d) {
+  state.proxyPage += d;
+  renderProxies();
+}
+
+// latencyBar renders a progress-bar style latency indicator. maxMS is the
+// threshold (e.g. 3000ms for free proxies); the fill ratio and color reflect
+// the current latency only (no timestamps).
+function latencyBar(latencyMS, maxMS = 3000) {
+  if (!latencyMS || latencyMS <= 0) return '<span style="color:var(--muted);font-size:12px;">—</span>';
+  const ratio = Math.min(1, latencyMS / maxMS);
+  const pct = Math.max(3, Math.round(ratio * 100));
+  const color = latencyMS <= maxMS * 0.4 ? '#22c55e' : (latencyMS <= maxMS * 0.7 ? '#f59e0b' : '#ef4444');
+  const cls = latencyMS <= maxMS * 0.4 ? '' : (latencyMS <= maxMS * 0.7 ? 'mid' : 'slow');
+  return `<div class="latency-bar">
+    <div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div>
+    <span class="val ${cls}">${latencyMS}ms</span>
+  </div>`;
+}
+
+let alertConfig = null;
+
+async function loadAlerts() {
+  try {
+    alertConfig = await api('/api/v1/admin/alerts');
+    renderWebhooks();
+    document.getElementById('a-smtp-host').value = alertConfig.email.smtp_host || '';
+    document.getElementById('a-smtp-port').value = alertConfig.email.smtp_port || 587;
+    document.getElementById('a-smtp-user').value = alertConfig.email.username || '';
+    document.getElementById('a-smtp-pass').value = '';
+    document.getElementById('a-smtp-from').value = alertConfig.email.from || '';
+    document.getElementById('a-smtp-to').value = (alertConfig.email.to || []).join(', ');
+    document.getElementById('a-smtp-events').value = (alertConfig.email.events || []).join(', ');
+    document.getElementById('a-smtp-tls').checked = !!alertConfig.email.use_tls;
+    document.getElementById('a-dedup').value = alertConfig.dedup_seconds;
+    document.getElementById('a-monitor').value = alertConfig.monitor_interval_s;
+    document.getElementById('a-recover').value = alertConfig.recover_interval_s;
+  } catch (e) {
+    document.getElementById('alert-webhook-tbody').innerHTML =
+      '<tr><td colspan="3" class="empty">告警配置不可用: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+function renderWebhooks() {
+  const tbody = document.getElementById('alert-webhook-tbody');
+  const whs = alertConfig.webhooks || [];
+  if (!whs.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无 Webhook</td></tr>';
+    return;
+  }
+  tbody.innerHTML = whs.map(w =>
+    `<tr>
+      <td>${esc(w.remark || '')}</td>
+      <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;">${esc(w.url)}</td>
+      <td class="mono">${w.secret ? '••••••••' : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${esc((w.events && w.events.length) ? w.events.join(', ') : '全部')}</td>
+      <td class="nowrap">
+        <button class="btn btn-sm" data-url="${esc(w.url)}" onclick="openWebhookModal(this.dataset.url)">编辑</button>
+        <button class="btn btn-sm btn-danger" data-url="${esc(w.url)}" onclick="removeWebhook(this.dataset.url)">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+let editingWebhookUrl = null;
+
+function openWebhookModal(url) {
+  editingWebhookUrl = null;
+  document.getElementById('wh-modal-title').textContent = '新增 Webhook';
+  ['wh-remark','wh-url','wh-secret','wh-events'].forEach(id => document.getElementById(id).value = '');
+  const w = (alertConfig.webhooks || []).find(x => x.url === url);
+  if (w) {
+    editingWebhookUrl = w.url;
+    document.getElementById('wh-modal-title').textContent = '编辑 Webhook';
+    document.getElementById('wh-remark').value = w.remark || '';
+    document.getElementById('wh-url').value = w.url;
+    document.getElementById('wh-secret').value = w.secret || '';
+    document.getElementById('wh-events').value = (w.events || []).join(', ');
+  }
+  document.getElementById('webhook-modal').style.display = 'flex';
+}
+
+function closeWebhookModal() {
+  document.getElementById('webhook-modal').style.display = 'none';
+}
+
+async function saveWebhook() {
+  const url = document.getElementById('wh-url').value.trim();
+  if (!url) { toast('URL 不能为空', true); return; }
+  const body = {
+    url,
+    secret: document.getElementById('wh-secret').value.trim(),
+    events: document.getElementById('wh-events').value.split(',').map(s => s.trim()).filter(Boolean),
+    remark: document.getElementById('wh-remark').value.trim(),
+  };
+  try {
+    if (editingWebhookUrl) {
+      await api('/api/v1/admin/alerts/webhooks', { method: 'PUT', body: JSON.stringify({ old_url: editingWebhookUrl, ...body }) });
+      toast('Webhook 已更新');
+    } else {
+      await api('/api/v1/admin/alerts/webhooks', { method: 'POST', body: JSON.stringify(body) });
+      toast('Webhook 已添加');
+    }
+    closeWebhookModal();
+    await loadAlerts();
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function addWebhook() {
+  const url = document.getElementById('a-wh-url').value.trim();
+  if (!url) { toast('URL 不能为空', true); return; }
+  const secret = document.getElementById('a-wh-secret').value.trim();
+  const events = document.getElementById('a-wh-events').value
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const remark = document.getElementById('a-wh-remark').value.trim();
+  try {
+    await api('/api/v1/admin/alerts/webhooks', { method: 'POST', body: JSON.stringify({ url, secret, events, remark }) });
+    toast('Webhook 已添加');
+    document.getElementById('a-wh-remark').value = '';
+    document.getElementById('a-wh-url').value = '';
+    document.getElementById('a-wh-secret').value = '';
+    document.getElementById('a-wh-events').value = '';
+    await loadAlerts();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
+
+async function removeWebhook(url) {
+  if (!confirm(`确认删除 Webhook「${url}」？`)) return;
+  try {
+    await api('/api/v1/admin/alerts/webhooks?url=' + encodeURIComponent(url), { method: 'DELETE' });
+    toast('Webhook 已删除');
+    await loadAlerts();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function saveEmail() {
+  const body = {
+    smtp_host: document.getElementById('a-smtp-host').value.trim(),
+    smtp_port: parseInt(document.getElementById('a-smtp-port').value) || 587,
+    username: document.getElementById('a-smtp-user').value.trim(),
+    password: document.getElementById('a-smtp-pass').value.trim(),
+    from: document.getElementById('a-smtp-from').value.trim(),
+    to: document.getElementById('a-smtp-to').value.split(',').map(s => s.trim()).filter(Boolean),
+    events: document.getElementById('a-smtp-events').value.split(',').map(s => s.trim()).filter(Boolean),
+    use_tls: document.getElementById('a-smtp-tls').checked,
+  };
+  try {
+    await api('/api/v1/admin/alerts/email', { method: 'POST', body: JSON.stringify(body) });
+    toast('邮件配置已保存');
+    await loadAlerts();
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function saveDedup() {
+  const v = parseInt(document.getElementById('a-dedup').value);
+  if (isNaN(v) || v < 0) { toast('去重窗口必须 >= 0', true); return; }
+  try {
+    await api('/api/v1/admin/alerts/dedup', { method: 'POST', body: JSON.stringify({ dedup_seconds: v }) });
+    toast('去重窗口已更新');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function saveMonitor() {
+  const v = parseInt(document.getElementById('a-monitor').value);
+  if (isNaN(v) || v < 1) { toast('监控间隔必须 >= 1', true); return; }
+  try {
+    await api('/api/v1/admin/alerts/monitor', { method: 'POST', body: JSON.stringify({ monitor_interval_s: v }) });
+    toast('监控间隔已更新');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function saveRecover() {
+  const v = parseInt(document.getElementById('a-recover').value);
+  if (isNaN(v) || v < 0) { toast('恢复间隔必须 >= 0', true); return; }
+  try {
+    await api('/api/v1/admin/alerts/recover', { method: 'POST', body: JSON.stringify({ recover_interval_s: v }) });
+    toast('恢复自检间隔已更新');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function loadGroups() {
+  try {
+    const data = await api('/api/v1/admin/groups');
+    state.groups = data.groups || [];
+    renderGroups();
+  } catch (e) {
+    document.getElementById('groups-container').innerHTML =
+      '<div class="empty">分组数据不可用: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderGroups() {
+  const el = document.getElementById('groups-container');
+  if (!state.groups.length) {
+    el.innerHTML = '<div class="empty">未配置调度分组，当前使用优先级模式</div>';
+    return;
+  }
+  el.innerHTML = state.groups.map((g, gi) => {
+    const gwEnabled = g.username && g.password;
+    const gwAuth = gwEnabled
+      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000" onclick="copyGateway(this)">复制</button></div>`
+      : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
+    const rows = (g.tiers || []).map((t, ti) => {
+      const names = ti === 0 ? (g.primary || []).join(', ') : ((g.backups || [])[ti - 1]?.providers || []).join(', ');
+      return `
+      <tr>
+        <td class="col-tier">${esc(t.name)}${ti === 0 ? ' <span class="badge on" style="font-size:10px;">主池</span>' : ' <span class="badge kind" style="font-size:10px;">备用</span>'}</td>
+        <td class="col-num">${t.alive_count}</td>
+        <td class="col-num">${t.alive_total}</td>
+        <td class="col-num">${(t.min_alive_ratio * 100).toFixed(0)}%</td>
+        <td class="col-status">${t.usable ? '<span class="badge on">可用</span>' : '<span class="badge off">不可用</span>'}</td>
+        <td class="col-providers" style="color:var(--muted);font-size:12px;">${esc(names || '—')}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty">无层级</td></tr>';
+    const regionBadges = (g.regions || []).map(r =>
+      `<span class="badge ${r === 'domestic' ? 'on' : (r === 'overseas' ? 'kind' : '')}">${esc(REGION_LABELS[r] || countryName(r) + ' (' + r + ')')}</span>`
+    ).join('') || '';
+    return `
+    <div class="group-card">
+      <div class="group-head">
+        <div class="group-title">
+          <span class="mono group-name">${esc(g.group)}</span>
+          ${g.type ? `<span class="badge kind">${esc(g.type)}</span>` : ''}
+          ${regionBadges}
+          <span class="badge ${gwEnabled ? 'on' : 'off'}">${gwEnabled ? '网关已启用' : '网关未启用'}</span>
+        </div>
+        <div class="group-actions">
+          <button class="btn btn-sm" data-name="${esc(g.group)}" onclick="openGroupModal(this.dataset.name)">编辑</button>
+          <button class="btn btn-sm btn-danger" data-name="${esc(g.group)}" onclick="removeGroup(this.dataset.name)">删除</button>
+        </div>
+      </div>
+      ${gwAuth}
+      <table class="group-table">
+        <thead><tr><th class="col-tier">层级</th><th class="col-num">存活</th><th class="col-num">总数</th><th class="col-num">阈值</th><th class="col-status">可用</th><th class="col-providers">包含 provider</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+}
+
+let editingGroup = null;
+let gBackupRows = []; // 每一行是一个 {name, min_alive_ratio, providers:[...]}
+let gPrimaryWeights = {}; // 主池 provider 名 -> 权重（分组层，缺省 1）
+let gPrimaryPicked = []; // 主池当前勾选的 provider 名
+
+// regionLabels maps a region token to a human label.
+const REGION_LABELS = { domestic: '国内(CN)', overseas: '海外' };
+const KNOWN_COUNTRY_NAMES = {
+  CN: '中国', US: '美国', JP: '日本', KR: '韩国', HK: '中国香港', TW: '中国台湾',
+  SG: '新加坡', DE: '德国', GB: '英国', FR: '法国', RU: '俄罗斯', IN: '印度',
+  CA: '加拿大', AU: '澳大利亚', BR: '巴西', TH: '泰国', VN: '越南', ID: '印尼',
+};
+
+// countryName returns a friendly name for a country code when known.
+function countryName(code) {
+  return KNOWN_COUNTRY_NAMES[code] || code;
+}
+
+function openGroupModal(name) {
+  editingGroup = null;
+  gBackupRows = [];
+  openBackupPickId = -1;
+  gPrimaryWeights = {};
+  document.getElementById('group-modal-title').textContent = '新增分组';
+  document.getElementById('g-name').value = '';
+  document.getElementById('g-type').value = '';
+  document.getElementById('g-min-ratio').value = 0;
+  document.getElementById('g-username').value = '';
+  document.getElementById('g-password').value = '';
+  // reset region checkboxes
+  document.querySelectorAll('#g-regions input[type=checkbox]').forEach(cb => cb.checked = false);
+  renderRegionCountryChecks([]);
+  renderPrimaryPick([]);
+  renderBackupRows();
+
+  const g = state.groups.find(x => x.group === name);
+  if (g) {
+    editingGroup = g.group;
+    document.getElementById('group-modal-title').textContent = '编辑分组 ' + g.group;
+    document.getElementById('g-name').value = g.group;
+    document.getElementById('g-type').value = g.type || '';
+    document.getElementById('g-min-ratio').value = g.min_alive_ratio ?? 0;
+    document.getElementById('g-username').value = g.username || '';
+    document.getElementById('g-password').value = g.password || '';
+    renderRegionCountryChecks(g.regions || []);
+    (g.regions || []).forEach(r => {
+      const cb = document.querySelector(`#g-regions input[value="${esc(r)}"]`);
+      if (cb) cb.checked = true;
+    });
+    gPrimaryWeights = Object.assign({}, g.primary_weights || {});
+    renderPrimaryPick(g.primary || []);
+    gBackupRows = (g.backups || []).map(b => ({ name: b.name || '', min_alive_ratio: b.min_alive_ratio ?? 0, providers: b.providers || [] }));
+    renderBackupRows();
+  }
+  syncRegionCountries();
+  document.getElementById('group-modal').classList.add('show');
+}
+
+// onRegionToggle reacts to the 国内/海外 main pills: only when 海外 is selected
+// does the country-code list show (two-level linkage).
+function onRegionToggle() {
+  syncRegionCountries();
+}
+
+// syncRegionCountries shows/hides the country-code list based on whether the
+// 海外 pill is checked.
+function syncRegionCountries() {
+  const overseas = document.querySelector('#g-regions input[value="overseas"]');
+  const el = document.getElementById('g-region-countries');
+  if (overseas && overseas.checked) {
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// renderRegionCountryChecks populates the country-code checkboxes (from the
+// providers' observed country distribution) and marks the selected ones.
+function renderRegionCountryChecks(selected) {
+  const sel = new Set(selected || []);
+  const codes = new Set();
+  (state.providers || []).forEach(p => {
+    Object.keys(p.countries || {}).forEach(c => {
+      if (c !== 'unknown' && c !== 'domestic' && c !== 'overseas' && c !== 'CN') codes.add(c);
+    });
+  });
+  const el = document.getElementById('g-region-countries');
+  if (!codes.size) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;">暂无已识别的国家代码（代理入池后自动补充）</div>';
+    return;
+  }
+  el.innerHTML = [...codes].sort().map(c =>
+    `<label class="region-pill ${sel.has(c) ? 'on' : ''}"><input type="checkbox" value="${esc(c)}" ${sel.has(c) ? 'checked' : ''}> ${esc(countryName(c))} (${esc(c)})</label>`
+  ).join('');
+}
+
+// providerRegionLabel summarizes a provider's observed country distribution as
+// a coarse region badge: 国内 / 海外 / 国内+海外.
+function providerRegionLabel(countries) {
+  const c = countries || {};
+  const entries = Object.entries(c);
+  if (!entries.length) return '未知';
+  const hasCN = (c.CN || 0) > 0;
+  const hasOther = entries.some(([k, n]) => k !== 'CN' && n > 0);
+  if (hasCN && hasOther) return '国内+海外';
+  if (hasCN) return '国内';
+  return '海外';
+}
+
+// regionBadgeClass picks a badge color for the coarse region label.
+function regionBadgeClass(p) {
+  const label = providerRegionLabel(p.countries);
+  if (label === '国内') return 'on';
+  if (label === '海外') return 'kind';
+  if (label === '国内+海外') return 'tunnel';
+  return 'off';
+}
+
+// renderPrimaryPick renders the primary provider card grid. Each selected card
+// gets a weight input (缺省 1) stored in gPrimaryWeights.
+function renderPrimaryPick(selected) {
+  if (selected) gPrimaryPicked = selected.slice();
+  const sel = new Set(gPrimaryPicked);
+  const el = document.getElementById('g-primary-pick');
+  if (!state.providers.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;">无可用 provider</div>';
+    return;
+  }
+  const ordered = state.providers.slice().sort((a, b) => {
+    if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  el.innerHTML = ordered.map(p => {
+    const region = providerRegionLabel(p.countries);
+    const regionTag = region === '未知' ? '' : `<span class="pc-region">${esc(region)}</span>`;
+    const isOn = sel.has(p.name);
+    const wInput = isOn
+      ? `<span class="pc-weight">
+          <label style="font-size:10px;color:var(--muted);">权重</label>
+          <input type="number" min="1" value="${gPrimaryWeights[p.name] || 1}"
+            data-weight="${esc(p.name)}" onchange="setPrimaryWeight(this)">
+        </span>`
+      : '';
+    return `<label class="prov-card ${isOn ? 'on' : ''}" title="${esc(p.name)}">
+      <input type="checkbox" value="${esc(p.name)}" ${isOn ? 'checked' : ''}>
+      <span class="pc-name">${esc(p.name)}</span>
+      <span class="pc-count">存活 ${p.alive}/${p.total}</span>
+      ${regionTag}
+      ${wInput}
+    </label>`;
+  }).join('');
+}
+
+// togglePrimaryPick updates the picked set and re-renders so weight inputs
+// appear/disappear for the selected cards.
+function togglePrimaryPick(checked, name) {
+  if (checked) {
+    if (!gPrimaryPicked.includes(name)) gPrimaryPicked.push(name);
+  } else {
+    gPrimaryPicked = gPrimaryPicked.filter(n => n !== name);
+  }
+  renderPrimaryPick();
+}
+
+// setPrimaryWeight records a primary-pool provider weight on change.
+function setPrimaryWeight(input) {
+  const name = input.dataset.weight;
+  const w = parseInt(input.value);
+  gPrimaryWeights[name] = (w && w >= 1) ? w : 1;
+  if (!(w && w >= 1)) input.value = 1;
+}
+
+// openBackupPickId tracks which backup row's dropdown is currently expanded.
+let openBackupPickId = -1;
+
+// toggleBackupPick opens/closes the provider dropdown of backup row i.
+function toggleBackupPick(i) {
+  openBackupPickId = openBackupPickId === i ? -1 : i;
+  renderBackupRows();
+}
+
+// renderBackupRows renders the ordered backup pool rows. Each row uses a
+// dropdown selector: click to expand, shows each available provider with its
+// alive count and region badge, click an option to toggle it.
+function renderBackupRows() {
+  const el = document.getElementById('g-backup-rows');
+  if (!gBackupRows.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;">暂无备用池。点击下方“+ 添加备用池”按顺序添加：第一行最先使用，第一行不可用才切到第二行。</div>';
+    return;
+  }
+  el.innerHTML = gBackupRows.map((row, i) => {
+    const picked = new Set(row.providers || []);
+    const opts = state.providers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p => {
+      const region = providerRegionLabel(p.countries);
+      const regionTag = region === '未知' ? '' : `<span class="badge ${regionBadgeClass(p)}" style="font-size:10px;margin-right:4px;">${esc(region)}</span>`;
+      return `<label class="bk-opt" title="${esc(p.name)}">
+        <input type="checkbox" value="${esc(p.name)}" data-bk="${i}" data-prov="${esc(p.name)}" ${picked.has(p.name) ? 'checked' : ''}>
+        <span class="bk-name">${esc(p.name)}</span>
+        ${regionTag}
+        <span class="bk-meta">存活 ${p.alive}/${p.total}</span>
+      </label>`;
+    }).join('') || '<div style="color:var(--muted);font-size:11px;padding:8px 12px;">无可用 provider</div>';
+    const tags = picked.size
+      ? `<span class="bk-tags">${[...picked].map(n => `<span class="bk-tag">${esc(n)}</span>`).join('')}</span>`
+      : `<span class="bk-empty">未选择 provider（点击选择）</span>`;
+    return `
+    <div class="backup-row">
+      <div class="br-head">
+        <span class="badge kind">第${i + 1}备用</span>
+        <input id="bk-name-${i}" placeholder="备用池名称" value="${esc(row.name)}" data-bkname="${i}" oninput="gBackupRows[${i}].name=this.value">
+        <input class="br-ratio" type="number" step="0.01" min="0" max="1" value="${row.min_alive_ratio}" title="存活率阈值 min_alive_ratio" data-bkratio="${i}" oninput="gBackupRows[${i}].min_alive_ratio=parseFloat(this.value)||0">
+        <button class="btn btn-sm btn-danger" onclick="removeBackupRow(${i})">删除</button>
+      </div>
+      <div class="bk-pick ${openBackupPickId === i ? 'open' : ''}">
+        <button type="button" class="bk-trigger" onclick="toggleBackupPick(${i})">
+          ${tags}<span class="bk-caret">▾</span>
+        </button>
+        <div class="bk-panel">${opts}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// addBackupRow appends a new empty backup tier row.
+function addBackupRow() {
+  gBackupRows.push({ name: '', min_alive_ratio: 0, providers: [] });
+  renderBackupRows();
+}
+
+function removeBackupRow(i) {
+  gBackupRows.splice(i, 1);
+  renderBackupRows();
+}
+
+function closeGroupModal() {
+  document.getElementById('group-modal').classList.remove('show');
+}
+
+async function submitGroup() {
+  const name = document.getElementById('g-name').value.trim();
+  if (!name) { toast('分组名称必填', true); return; }
+
+  const primary = [];
+  document.querySelectorAll('#g-primary-pick input[type=checkbox]:checked').forEach(cb => primary.push(cb.value));
+  if (!primary.length) { toast('主池 provider 至少勾选一个', true); return; }
+
+  // collect primary weights (only for actually-selected providers)
+  const primary_weights = {};
+  primary.forEach(n => {
+    const w = gPrimaryWeights[n] || 1;
+    if (w >= 1) primary_weights[n] = w;
+  });
+
+  // read backup row checkbox selections (re-render to sync latest DOM state)
+  gBackupRows.forEach((row, i) => {
+    row.providers = [];
+    document.querySelectorAll(`#g-backup-rows input[data-bk="${i}"]:checked`).forEach(cb => row.providers.push(cb.value));
+  });
+  const backups = gBackupRows.map((row, i) => ({
+    name: row.name.trim() || ('backup-' + (i + 1)),
+    min_alive_ratio: row.min_alive_ratio || 0,
+    providers: row.providers,
+  })).filter(b => b.providers.length > 0);
+
+  const regions = [];
+  document.querySelectorAll('#g-regions input[type=checkbox]:checked, #g-region-countries input[type=checkbox]:checked').forEach(cb => regions.push(cb.value));
+
+  const username = document.getElementById('g-username').value.trim();
+  const password = document.getElementById('g-password').value;
+  if ((username && !password) || (!username && password)) {
+    toast('网关用户名与密码必须成对配置（或都留空）', true);
+    return;
+  }
+  const body = {
+    name,
+    type: document.getElementById('g-type').value,
+    min_alive_ratio: parseFloat(document.getElementById('g-min-ratio').value) || 0,
+    username,
+    password,
+    primary,
+    primary_weights,
+    backups,
+    regions,
+  };
+  try {
+    if (editingGroup) {
+      await api('/api/v1/admin/groups/' + encodeURIComponent(editingGroup), { method: 'PUT', body: JSON.stringify(body) });
+      toast('分组已更新');
+    } else {
+      await api('/api/v1/admin/groups', { method: 'POST', body: JSON.stringify(body) });
+      toast('分组已创建');
+    }
+    closeGroupModal();
+    await loadGroups();
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function removeGroup(name) {
+  if (!confirm(`确认删除分组「${name}」？`)) return;
+  try {
+    await api('/api/v1/admin/groups?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('分组已删除');
+    await loadGroups();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function copyGateway(btn) {
+  const gw = btn.dataset.gw;
+  try {
+    await navigator.clipboard.writeText(gw);
+    toast('网关地址已复制');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = gw;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('网关地址已复制');
+  }
+}
+
+async function loadAccounts() {
+  try {
+    const data = await api('/api/v1/admin/accounts');
+    state.accounts = data.accounts || [];
+    renderAccounts();
+  } catch (e) {
+    document.getElementById('account-tbody').innerHTML =
+      '<tr><td colspan="6" class="empty">账户不可用: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+function renderAccounts() {
+  const tb = document.getElementById('account-tbody');
+  if (!state.accounts.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty">未配置账户（鉴权关闭）</td></tr>';
+    return;
+  }
+  tb.innerHTML = state.accounts.map(a => `
+    <tr>
+      <td class="mono"><b>${esc(a.name)}</b></td>
+      <td><span class="badge ${a.role === 'admin' ? 'on' : 'kind'}">${esc(a.role)}</span></td>
+      <td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;">${esc(a.token)}</td>
+      <td>${esc((a.groups && a.groups.length) ? a.groups.join(', ') : '全部')}</td>
+      <td>${a.enabled ? '<span class="badge on">启用</span>' : '<span class="badge off">停用</span>'}</td>
+      <td class="nowrap">
+        <button class="btn btn-sm" data-name="${esc(a.name)}" onclick="openAccountModal(this.dataset.name)">编辑</button>
+        <button class="btn btn-sm btn-danger" data-name="${esc(a.name)}" onclick="removeAccount(this.dataset.name)">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+let editingAccount = null;
+
+function openAccountModal(name) {
+  editingAccount = null;
+  document.getElementById('acct-modal-title').textContent = '新增账户';
+  ['acct-name','acct-pass','acct-groups'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('acct-role').value = 'user';
+  document.getElementById('acct-enabled').checked = true;
+  const a = state.accounts.find(x => x.name === name);
+  if (a) {
+    editingAccount = a.name;
+    document.getElementById('acct-modal-title').textContent = '编辑账户 ' + a.name;
+    document.getElementById('acct-name').value = a.name;
+    document.getElementById('acct-pass').value = '';
+    document.getElementById('acct-role').value = a.role;
+    document.getElementById('acct-groups').value = (a.groups || []).join(', ');
+    document.getElementById('acct-enabled').checked = !!a.enabled;
+  }
+  document.getElementById('acct-modal').classList.add('show');
+}
+
+function closeAccountModal() {
+  document.getElementById('acct-modal').classList.remove('show');
+}
+
+async function submitAccount() {
+  const name = document.getElementById('acct-name').value.trim();
+  const password = document.getElementById('acct-pass').value;
+  const role = document.getElementById('acct-role').value;
+  const enabled = document.getElementById('acct-enabled').checked;
+  const groups = document.getElementById('acct-groups').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!name) { toast('账户名必填', true); return; }
+  const body = { name, password, role, enabled, groups };
+  try {
+    if (editingAccount) {
+      await api('/api/v1/admin/accounts/' + encodeURIComponent(editingAccount), { method: 'PUT', body: JSON.stringify(body) });
+      toast('账户已更新');
+    } else {
+      await api('/api/v1/admin/accounts', { method: 'POST', body: JSON.stringify(body) });
+      toast('账户已添加（Token 已自动生成）');
+    }
+    closeAccountModal();
+    await loadAccounts();
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function addAccount() {
+  const name = document.getElementById('acct-name').value.trim();
+  const password = document.getElementById('acct-pass').value;
+  const role = document.getElementById('acct-role').value;
+  const groups = document.getElementById('acct-groups').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!name) { toast('账户名必填', true); return; }
+  try {
+    await api('/api/v1/admin/accounts', {
+      method: 'POST',
+      body: JSON.stringify({ name, password, role, enabled: true, groups }),
+    });
+    toast('账户已添加（Token 已自动生成）');
+    ['acct-name','acct-pass','acct-groups'].forEach(id => document.getElementById(id).value = '');
+    await loadAccounts();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
+
+async function removeAccount(name) {
+  if (!confirm(`确认删除账户「${name}」？`)) return;
+  try {
+    await api('/api/v1/admin/accounts?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('账户已删除');
+    await loadAccounts();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function loadUsage() {
+  try {
+    const data = await api('/api/v1/admin/usage');
+    state.usage = data.accounts || [];
+    renderUsage();
+  } catch (e) {
+    document.getElementById('usage-tbody').innerHTML =
+      '<tr><td colspan="4" class="empty">统计不可用: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+function renderUsage() {
+  const tb = document.getElementById('usage-tbody');
+  if (!state.usage.length) {
+    tb.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>';
+    return;
+  }
+  tb.innerHTML = state.usage.map(u => `
+    <tr>
+      <td class="mono"><b>${esc(u.account)}</b></td>
+      <td>${u.total}</td>
+      <td>${u.ok}</td>
+      <td>${u.total ? ((u.ok / u.total) * 100).toFixed(1) + '%' : '-'}</td>
+    </tr>`).join('');
+}
+
+async function refreshAll() {
+  await Promise.all([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
+}
+
+async function toggleProvider(name, enabled) {
+  try {
+    const action = enabled ? 'enable' : 'disable';
+    await api(`/api/v1/admin/providers/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    toast(`Provider「${name}」已${enabled ? '启用' : '停用'}`);
+    await refreshAll();
+  } catch (e) { toast('操作失败: ' + e.message, true); refreshAll(); }
+}
+
+async function refreshProvider(name) {
+  try {
+    await api(`/api/v1/admin/providers/${encodeURIComponent(name)}/refresh`, { method: 'POST' });
+    toast(`Provider「${name}」已刷新`);
+    await refreshAll();
+  } catch (e) { toast('刷新失败: ' + e.message, true); refreshAll(); }
+}
+
+async function removeProvider(name) {
+  if (!confirm(`确认删除 Provider「${name}」？其所有代理将被移除。`)) return;
+  try {
+    await api(`/api/v1/admin/providers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    toast(`Provider「${name}」已删除`);
+    await refreshAll();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function removeProxy(id) {
+  if (!confirm('确认删除该代理？')) return;
+  try {
+    await api(`/api/v1/admin/proxies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('代理已删除');
+    await refreshAll();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function runHealthCheck() {
+  try {
+    await api('/api/v1/admin/health/check', { method: 'POST' });
+    toast('健康检查已完成');
+    await refreshAll();
+  } catch (e) { toast('健康检查失败: ' + e.message, true); }
+}
+
+let editingProviderName = null;
+
+function openAddProvider() {
+  editingProviderName = null;
+  document.getElementById('provider-modal-title').textContent = '添加 Provider';
+  ['p-name','p-tunnel-gateway','p-tunnel-user','p-tunnel-pass','p-extract-url','p-extract-user','p-extract-pass','p-check-url','p-country'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('p-check-interval').value = 0;
+  document.getElementById('p-min-ratio').value = 0;
+  document.getElementById('p-sticky-seconds').value = 60;
+  document.getElementById('p-tunnel-port').value = 8080;
+  document.getElementById('p-refresh').value = 60;
+  document.getElementById('p-expire').value = 600;
+  document.getElementById('p-type').value = 'tunnel';
+  document.getElementById('p-name').readOnly = false;
+  toggleTunnelFields();
+  document.getElementById('provider-modal').classList.add('show');
+}
+
+function openEditProvider(name) {
+  const p = state.providers.find(x => x.name === name);
+  if (!p) { toast('未找到 Provider: ' + name, true); return; }
+  editingProviderName = name;
+  document.getElementById('provider-modal-title').textContent = '编辑 Provider：' + name;
+  const cfg = p.config || {};
+  document.getElementById('p-name').value = name;
+  document.getElementById('p-name').readOnly = true;
+  document.getElementById('p-type').value = cfg.type || p.type || 'tunnel';
+  document.getElementById('p-check-interval').value = cfg.check_interval_s || 0;
+  document.getElementById('p-min-ratio').value = (p.min_alive_ratio !== undefined ? p.min_alive_ratio : cfg.min_alive_ratio) || 0;
+  document.getElementById('p-sticky-seconds').value = p.sticky_seconds || cfg.sticky_seconds || 60;
+  document.getElementById('p-check-url').value = cfg.check_url || '';
+  document.getElementById('p-country').value = cfg.country || '';
+
+  const t = cfg.tunnel || {};
+  document.getElementById('p-tunnel-scheme').value = t.scheme || 'http';
+  document.getElementById('p-tunnel-gateway').value = t.gateway || '';
+  document.getElementById('p-tunnel-port').value = t.port || 8080;
+  document.getElementById('p-tunnel-user').value = t.username || '';
+  document.getElementById('p-tunnel-pass').value = t.password || '';
+
+  const ip = cfg.ip_pool || {};
+  document.getElementById('p-extract-url').value = ip.extract_url || '';
+  document.getElementById('p-format').value = ip.format || 'text';
+  document.getElementById('p-refresh').value = ip.refresh_interval_s || 60;
+  document.getElementById('p-expire').value = ip.expire_after_s || 600;
+  document.getElementById('p-extract-user').value = ip.username || '';
+  document.getElementById('p-extract-pass').value = ip.password || '';
+
+  const fr = cfg.free || {};
+  document.getElementById('p-free-feed').value = fr.feed_url || '';
+  document.getElementById('p-free-refresh').value = fr.refresh_interval_s || 600;
+  document.getElementById('p-free-max-speed').value = fr.max_speed_ms || 3000;
+  document.getElementById('p-free-delete-latency').value = fr.delete_latency_ms || 3000;
+  document.getElementById('p-free-expire').value = fr.expire_after_s || 0;
+  document.getElementById('p-free-max-proxies').value = fr.max_proxies || 0;
+
+  toggleTunnelFields();
+  document.getElementById('provider-modal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('provider-modal').classList.remove('show');
+}
+
+function toggleTunnelFields() {
+  const type = document.getElementById('p-type').value;
+  document.getElementById('tunnel-fields').style.display = type === 'tunnel' ? '' : 'none';
+  const usePool = type === 'ip_pool' || type === 'sticky';
+  document.getElementById('ippool-fields').style.display = usePool ? '' : 'none';
+  document.getElementById('p-sticky-row').style.display = type === 'sticky' ? '' : 'none';
+  document.getElementById('free-fields').style.display = type === 'free' ? '' : 'none';
+}
+
+async function submitProvider() {
+  const type = document.getElementById('p-type').value;
+  const body = {
+    name: document.getElementById('p-name').value.trim(),
+    type,
+    enabled: true,
+    check_interval_s: parseInt(document.getElementById('p-check-interval').value) || 0,
+    min_alive_ratio: parseFloat(document.getElementById('p-min-ratio').value) || 0,
+    check_url: document.getElementById('p-check-url').value.trim() || undefined,
+    country: document.getElementById('p-country').value.trim().toUpperCase() || undefined,
+  };
+  if (!body.name) { toast('名称不能为空', true); return; }
+  if (type === 'tunnel') {
+    body.tunnel = {
+      scheme: document.getElementById('p-tunnel-scheme').value,
+      gateway: document.getElementById('p-tunnel-gateway').value.trim(),
+      port: parseInt(document.getElementById('p-tunnel-port').value) || 8080,
+      username: document.getElementById('p-tunnel-user').value.trim(),
+      password: document.getElementById('p-tunnel-pass').value.trim(),
+    };
+    if (!body.tunnel.gateway) { toast('网关地址不能为空', true); return; }
+  } else if (type === 'free') {
+    body.free = {
+      feed_url: document.getElementById('p-free-feed').value.trim(),
+      refresh_interval_s: parseInt(document.getElementById('p-free-refresh').value) || 600,
+      max_speed_ms: parseInt(document.getElementById('p-free-max-speed').value) || 3000,
+      delete_latency_ms: parseInt(document.getElementById('p-free-delete-latency').value) || 3000,
+      expire_after_s: parseInt(document.getElementById('p-free-expire').value) || 0,
+      max_proxies: parseInt(document.getElementById('p-free-max-proxies').value) || 0,
+    };
+    if (!body.free.feed_url) { toast('免费源 feed_url 不能为空', true); return; }
+  } else {
+    body.ip_pool = {
+      extract_url: document.getElementById('p-extract-url').value.trim(),
+      format: document.getElementById('p-format').value,
+      refresh_interval_s: parseInt(document.getElementById('p-refresh').value) || 60,
+      expire_after_s: parseInt(document.getElementById('p-expire').value) || 600,
+      username: document.getElementById('p-extract-user').value.trim(),
+      password: document.getElementById('p-extract-pass').value.trim(),
+    };
+    if (!body.ip_pool.extract_url) { toast('提取 API 不能为空', true); return; }
+    if (type === 'sticky') {
+      body.sticky_seconds = parseInt(document.getElementById('p-sticky-seconds').value) || 60;
+      if (body.sticky_seconds <= 0) { toast('粘性时长必须 > 0', true); return; }
+    }
+  }
+  try {
+    if (editingProviderName) {
+      await api(`/api/v1/admin/providers/${encodeURIComponent(editingProviderName)}`, { method: 'PUT', body: JSON.stringify(body) });
+      toast('Provider 已更新');
+    } else {
+      await api('/api/v1/admin/providers', { method: 'POST', body: JSON.stringify(body) });
+      toast('Provider 已添加');
+    }
+    closeModal();
+    await refreshAll();
+  } catch (e) { toast((editingProviderName ? '更新失败' : '添加失败') + ': ' + e.message, true); }
+}
+
+function switchView(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  if (name === 'apidoc') renderAPIDoc();
+}
+
+// ---- API 文档 ----
+let apiDocLang = 'curl';
+let apiDocSel = -1;
+
+// auth: "anonymous" | "token" | "admin"
+// params: { name, type, req, desc, in? }  in: 'path' | 'query' | 'body'，默认 'query'
+// resp_fields: { name, type, desc }  响应字段说明
+const APIDOC_ENDPOINTS = [
+  {
+    method: 'POST', path: '/api/v1/auth/login', auth: 'anonymous', title: '登录换取 Token',
+    params: [
+      { name: 'name', type: 'string', req: true, desc: '账户名', in: 'body' },
+      { name: 'password', type: 'string', req: true, desc: '密码', in: 'body' },
+    ], body: '{"name":"admin","password":"admin123"}',
+    curl: 'curl -X POST {HOST}/api/v1/auth/login \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"admin","password":"admin123"}\'',
+    py: 'import requests\n\nr = requests.post("{HOST}/api/v1/auth/login", json={"name": "admin", "password": "admin123"})\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "token": "<token>",\n  "name": "admin",\n  "role": "admin",\n  "groups": [],\n  "admin": true\n}',
+    resp_fields: [
+      { name: 'ok', type: 'boolean', desc: '是否成功' },
+      { name: 'token', type: 'string', desc: '访问令牌，后续请求作为 Authorization: Bearer 使用' },
+      { name: 'name', type: 'string', desc: '账户名' },
+      { name: 'role', type: 'string', desc: '角色，admin 或 user' },
+      { name: 'groups', type: 'array<string>', desc: '该账户可用的调度分组名列表' },
+      { name: 'admin', type: 'boolean', desc: '是否管理员' },
+    ],
+  },
+  {
+    method: 'GET', path: '/api/v1/auth/me', auth: 'token', title: '当前账户信息（用于判断角色/可用分组）',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/auth/me',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/auth/me", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "name": "admin",\n  "role": "admin",\n  "groups": [],\n  "admin": true\n}',
+    resp_fields: [
+      { name: 'name', type: 'string', desc: '账户名' },
+      { name: 'role', type: 'string', desc: '角色，admin 或 user' },
+      { name: 'groups', type: 'array<string>', desc: '该账户可用的调度分组名列表' },
+      { name: 'admin', type: 'boolean', desc: '是否管理员' },
+    ],
+  },
+  {
+    method: 'GET', path: '/api/v1/proxy', auth: 'token', title: '取一个代理',
+    params: [
+      { name: 'group', type: 'string', req: false, desc: '调度分组名（如 charlespikachu-free），缺省用第一个分组', in: 'query' },
+      { name: 'sticky_seconds', type: 'integer', req: false, desc: '>0 时开启粘性会话，同 client_id 在此时长内复用同一 IP', in: 'query' },
+      { name: 'client_id', type: 'string', req: false, desc: '爬虫客户端标识，配合 sticky_seconds 使用', in: 'query' },
+    ], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxy?group=charlespikachu-free"',
+    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxy",\n    params={"group": "charlespikachu-free"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "proxy": {\n    "id": "charlespikachu-free:1.2.3.4:8080",\n    "scheme": "http",\n    "host": "1.2.3.4",\n    "port": 8080,\n    "provider": "charlespikachu-free",\n    "type": "free",\n    "addr": "1.2.3.4:8080"\n  }\n}',
+    resp_fields: [
+      { name: 'ok', type: 'boolean', desc: '是否成功' },
+      { name: 'proxy.id', type: 'string', desc: '代理 ID（含 provider 前缀），上报时作为 {id} 使用' },
+      { name: 'proxy.scheme', type: 'string', desc: '协议，http 或 https' },
+      { name: 'proxy.host', type: 'string', desc: '代理 IP 或域名' },
+      { name: 'proxy.port', type: 'integer', desc: '端口' },
+      { name: 'proxy.provider', type: 'string', desc: '所属 Provider 名称' },
+      { name: 'proxy.type', type: 'string', desc: '代理类型，free 或 tunnel' },
+      { name: 'proxy.addr', type: 'string', desc: 'host:port 组合地址' },
+    ],
+  },
+  {
+    method: 'GET', path: '/api/v1/proxies', auth: 'token', title: '批量取代理',
+    params: [
+      { name: 'count', type: 'integer', req: false, desc: '数量（1~100，默认 1）', in: 'query' },
+      { name: 'group', type: 'string', req: false, desc: '调度分组名，缺省用第一个分组', in: 'query' },
+    ], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxies?count=5&group=charlespikachu-free"',
+    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxies",\n    params={"count": 5, "group": "charlespikachu-free"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "proxies": [\n    {"id": "charlespikachu-free:1.2.3.4:8080", "scheme": "http", "host": "1.2.3.4", "port": 8080, "type": "free", "addr": "1.2.3.4:8080"}\n  ]\n}',
+    resp_fields: [
+      { name: 'ok', type: 'boolean', desc: '是否成功' },
+      { name: 'proxies', type: 'array<object>', desc: '代理对象数组，字段与 /api/v1/proxy 的 proxy 一致' },
+    ],
+  },
+  {
+    method: 'POST', path: '/api/v1/proxy/{id}/report', auth: 'token', title: '上报使用结果（成功/失败）',
+    params: [
+      { name: '{id}', type: 'string', req: true, desc: '代理 ID（取代理响应中的 id 字段）', in: 'path' },
+      { name: 'success', type: 'boolean', req: true, desc: '本次使用是否成功', in: 'body' },
+      { name: 'latency_ms', type: 'integer', req: false, desc: '本次请求延迟毫秒数', in: 'body' },
+    ],
+    body: '{"success":true,"latency_ms":120}',
+    curl: 'curl -X POST "{HOST}/api/v1/proxy/charlespikachu-free:1.2.3.4:8080/report" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"success":true,"latency_ms":120}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/proxy/charlespikachu-free:1.2.3.4:8080/report",\n    json={"success": True, "latency_ms": 120},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/feedback', auth: 'token', title: '上报使用结果（按 ID 的替代接口）',
+    params: [
+      { name: 'id', type: 'string', req: true, desc: '代理 ID（取代理响应中的 id 字段）', in: 'body' },
+      { name: 'success', type: 'boolean', req: true, desc: '本次使用是否成功', in: 'body' },
+      { name: 'latency_ms', type: 'integer', req: false, desc: '本次请求延迟毫秒数', in: 'body' },
+    ], body: '{"id":"charlespikachu-free:1.2.3.4:8080","success":false,"latency_ms":3000}',
+    curl: 'curl -X POST {HOST}/api/v1/feedback \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"id":"charlespikachu-free:1.2.3.4:8080","success":false,"latency_ms":3000}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/feedback",\n    json={"id": "charlespikachu-free:1.2.3.4:8080", "success": False, "latency_ms": 3000},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'GET', path: '/api/v1/status', auth: 'token', title: '服务状态概览',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/status',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/status", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "total": 60,\n  "alive": 39,\n  "by_provider": {"providers": [{"provider": "charlespikachu-free", "type": "free", "total": 60, "alive": 39}]},\n  "groups": [{"group": "charlespikachu-free", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "usable": true}]}]\n}',
+    resp_fields: [
+      { name: 'ok', type: 'boolean', desc: '是否成功' },
+      { name: 'total', type: 'integer', desc: '代理总数' },
+      { name: 'alive', type: 'integer', desc: '存活代理数' },
+      { name: 'by_provider.providers', type: 'array<object>', desc: '按 Provider 汇总的存活统计' },
+      { name: 'providers[].provider', type: 'string', desc: 'Provider 名称' },
+      { name: 'providers[].type', type: 'string', desc: 'Provider 类型，free 或 tunnel' },
+      { name: 'providers[].total', type: 'integer', desc: '该 Provider 代理总数' },
+      { name: 'providers[].alive', type: 'integer', desc: '该 Provider 存活数' },
+      { name: 'groups', type: 'array<object>', desc: '各调度分组的分层存活状态' },
+      { name: 'groups[].group', type: 'string', desc: '分组名' },
+      { name: 'groups[].tiers', type: 'array<object>', desc: '该分组的分层状态' },
+      { name: 'tiers[].name', type: 'string', desc: '层名，如 primary' },
+      { name: 'tiers[].alive_count', type: 'integer', desc: '该层存活数' },
+      { name: 'tiers[].alive_total', type: 'integer', desc: '该层总数' },
+      { name: 'tiers[].usable', type: 'boolean', desc: '该层是否可用' },
+    ],
+  },
+  {
+    method: 'GET', path: '/healthz', auth: 'anonymous', title: '存活探针',
+    params: [], body: '',
+    curl: 'curl {HOST}/healthz',
+    py: 'import requests\n\nr = requests.get("{HOST}/healthz")\nprint(r.text)',
+    response: 'ok',
+    resp_fields: [
+      { name: 'body', type: 'text', desc: '存活时返回文本 ok' },
+    ],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/providers', auth: 'admin', title: 'Provider 列表与存活统计',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/providers',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/providers", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ]\n}',
+    resp_fields: [
+      { name: 'providers', type: 'array<object>', desc: 'Provider 列表' },
+      { name: 'providers[].name', type: 'string', desc: 'Provider 名称' },
+      { name: 'providers[].type', type: 'string', desc: '类型，free 或 tunnel' },
+      { name: 'providers[].provider_type', type: 'string', desc: 'Provider 类型：tunnel / ip_pool / sticky / free' },
+      { name: 'providers[].enabled', type: 'boolean', desc: '是否启用' },
+      { name: 'providers[].check_interval_s', type: 'integer', desc: '检测频率（秒），0 表示用全局 health_check.interval_s' },
+      { name: 'providers[].total', type: 'integer', desc: '代理总数' },
+      { name: 'providers[].alive', type: 'integer', desc: '存活代理数' },
+    ],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/providers', auth: 'admin', title: '新增 Provider',
+    params: [
+      { name: 'name', type: 'string', req: true, desc: 'Provider 名称', in: 'body' },
+      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
+      { name: 'enabled', type: 'boolean', req: false, desc: '是否启用，默认 true', in: 'body' },
+      { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
+      { name: 'tunnel', type: 'object', req: false, desc: 'tunnel 类型配置：scheme / gateway / port / username / password', in: 'body' },
+    ], body: '{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080,"username":"u","password":"p"}}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/providers \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080}}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers",\n    json={"name": "my-tunnel-01", "type": "tunnel", "enabled": True, "check_interval_s": 60, "tunnel": {"scheme": "http", "gateway": "tunnel.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'PUT', path: '/api/v1/admin/providers/{name}', auth: 'admin', title: '编辑 Provider（更新已添加的配置）',
+    params: [
+      { name: '{name}', type: 'string', req: true, desc: 'Provider 名称（路径中指定，不可改名）', in: 'path' },
+      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
+      { name: 'enabled', type: 'boolean', req: false, desc: '是否启用', in: 'body' },
+      { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
+      { name: 'tunnel', type: 'object', req: false, desc: 'tunnel 类型配置：scheme / gateway / port / username / password', in: 'body' },
+    ],
+    body: '{"type":"tunnel","enabled":true,"check_interval_s":30,"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}',
+    curl: 'curl -X PUT "{HOST}/api/v1/admin/providers/my-tunnel-01" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"type":"tunnel","enabled":true,"check_interval_s":30,"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}\'',
+    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/providers/my-tunnel-01",\n    json={"type": "tunnel", "enabled": True, "check_interval_s": 30, "tunnel": {"scheme": "http", "gateway": "tunnel2.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'DELETE', path: '/api/v1/admin/providers', auth: 'admin', title: '删除 Provider',
+    params: [{ name: 'name', type: 'string', req: true, desc: 'Provider 名称（query 参数）', in: 'query' }], body: '',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers?name=my-tunnel-01"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/providers",\n    params={"name": "my-tunnel-01"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/providers/{name}/refresh', auth: 'admin', title: '立即刷新采集',
+    params: [{ name: '{name}', type: 'string', req: true, desc: 'Provider 名称', in: 'path' }], body: '',
+    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/charlespikachu-free/refresh"',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers/charlespikachu-free/refresh",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/providers/{name}/enable', auth: 'admin', title: '启用 Provider',
+    params: [{ name: '{name}', type: 'string', req: true, desc: 'Provider 名称', in: 'path' }], body: '',
+    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/my-tunnel-01/enable"',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers/my-tunnel-01/enable",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/providers/{name}/disable', auth: 'admin', title: '停用 Provider',
+    params: [{ name: '{name}', type: 'string', req: true, desc: 'Provider 名称', in: 'path' }], body: '',
+    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/my-tunnel-01/disable"',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers/my-tunnel-01/disable",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/proxies', auth: 'admin', title: '代理明细（含当前延迟 latency_ms 与 free 标记）',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/proxies',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/proxies", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "proxies": [\n    {"id": "charlespikachu-free:1.2.3.4:8080", "addr": "1.2.3.4:8080", "kind": "free", "provider": "charlespikachu-free", "alive": true, "latency_ms": 120, "weight": 1, "free": true}\n  ]\n}',
+    resp_fields: [
+      { name: 'proxies', type: 'array<object>', desc: '代理明细列表' },
+      { name: 'proxies[].id', type: 'string', desc: '代理 ID（含 provider 前缀）' },
+      { name: 'proxies[].addr', type: 'string', desc: 'host:port 地址' },
+      { name: 'proxies[].kind', type: 'string', desc: '代理类型，free 或 tunnel' },
+      { name: 'proxies[].provider', type: 'string', desc: '所属 Provider' },
+      { name: 'proxies[].alive', type: 'boolean', desc: '是否存活' },
+      { name: 'proxies[].latency_ms', type: 'integer', desc: '当前延迟毫秒数，-1 表示未知' },
+      { name: 'proxies[].weight', type: 'integer', desc: '当前权重' },
+      { name: 'proxies[].free', type: 'boolean', desc: '是否来自免费池' },
+    ],
+  },
+  {
+    method: 'DELETE', path: '/api/v1/admin/proxies/{id}', auth: 'admin', title: '删除单个代理',
+    params: [{ name: '{id}', type: 'string', req: true, desc: '代理 ID', in: 'path' }], body: '',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/proxies/charlespikachu-free:1.2.3.4:8080"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/proxies/charlespikachu-free:1.2.3.4:8080",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/health/check', auth: 'admin', title: '手动触发一轮健康检查',
+    params: [], body: '',
+    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/health/check',
+    py: 'import requests\n\nr = requests.post("{HOST}/api/v1/admin/health/check", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/groups', auth: 'admin', title: '调度分组各层存活率与可用状态（含网关凭证与层级配置）',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/groups',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/groups", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "groups": [\n    {"group": "residential", "type": "static", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "min_alive_ratio": 0.5, "usable": true}], "primary": ["mock-sticky", "mock-ippool"], "primary_weights": {"mock-sticky": 2, "mock-ippool": 1}, "backups": [], "min_alive_ratio": 0.5, "username": "residential"}\n  ]\n}',
+    resp_fields: [
+      { name: 'groups', type: 'array<object>', desc: '分组列表' },
+      { name: 'groups[].group', type: 'string', desc: '分组名' },
+      { name: 'groups[].type', type: 'string', desc: '分组类型' },
+      { name: 'groups[].tiers', type: 'array<object>', desc: '该分组各层状态' },
+      { name: 'tiers[].name', type: 'string', desc: '层名，如 primary 或备用池名' },
+      { name: 'tiers[].alive_count', type: 'integer', desc: '该层存活数' },
+      { name: 'tiers[].alive_total', type: 'integer', desc: '该层总数' },
+      { name: 'tiers[].min_alive_ratio', type: 'number', desc: '该层最低存活率要求（0~1）' },
+      { name: 'tiers[].usable', type: 'boolean', desc: '该层是否可用' },
+      { name: 'groups[].primary', type: 'array<string>', desc: '主池 provider 列表' },
+      { name: 'groups[].primary_weights', type: 'object', desc: '主池各 provider 的调度权重（provider 名 -> 权重），未列出的用 1' },
+      { name: 'groups[].backups', type: 'array<object>', desc: '备用池配置列表' },
+      { name: 'groups[].min_alive_ratio', type: 'number', desc: '主池阈值（0~1）' },
+      { name: 'groups[].username', type: 'string', desc: '网关用户名（配置后使用 用户名:密码@host:10000 作为本组代理地址）' },
+    ],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/groups', auth: 'admin', title: '新增调度分组（热生效）',
+    params: [
+      { name: 'name', type: 'string', req: true, desc: '分组名（唯一）', in: 'body' },
+      { name: 'type', type: 'string', req: false, desc: '分组类型，如 static/free/tunnel', in: 'body' },
+      { name: 'min_alive_ratio', type: 'number', req: false, desc: '主池存活率阈值（0~1），默认 0', in: 'body' },
+      { name: 'username', type: 'string', req: false, desc: '网关用户名（可空；配置后可用代理网关走本组）', in: 'body' },
+      { name: 'password', type: 'string', req: false, desc: '网关密码', in: 'body' },
+      { name: 'primary', type: 'array<string>', req: true, desc: '主池 provider 名称列表', in: 'body' },
+      { name: 'primary_weights', type: 'object', req: false, desc: '主池各 provider 的调度权重（provider 名 -> 权重，>=1），未列出的用 1', in: 'body' },
+      { name: 'backups', type: 'array<object>', req: false, desc: '备用池：[{name,min_alive_ratio,providers:[...]}]', in: 'body' },
+    ], body: '{"name":"residential","type":"static","min_alive_ratio":0.5,"username":"residential","password":"pass","primary":["mock-sticky"],"primary_weights":{"mock-sticky":2},"backups":[{"name":"fallback","min_alive_ratio":0,"providers":["mock-tunnel"]}]}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/groups \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"residential","type":"static","min_alive_ratio":0.5,"username":"residential","password":"pass","primary":["mock-sticky"]}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/groups",\n    json={"name": "residential", "type": "static", "min_alive_ratio": 0.5, "username": "residential", "password": "pass", "primary": ["mock-sticky"]},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'PUT', path: '/api/v1/admin/groups/{name}', auth: 'admin', title: '编辑调度分组（热生效，不可改名）',
+    params: [
+      { name: '{name}', type: 'string', req: true, desc: '分组名（路径指定）', in: 'path' },
+      { name: 'type', type: 'string', req: false, desc: '分组类型', in: 'body' },
+      { name: 'min_alive_ratio', type: 'number', req: false, desc: '主池存活率阈值（0~1）', in: 'body' },
+      { name: 'username', type: 'string', req: false, desc: '网关用户名', in: 'body' },
+      { name: 'password', type: 'string', req: false, desc: '网关密码', in: 'body' },
+      { name: 'primary', type: 'array<string>', req: true, desc: '主池 provider 列表', in: 'body' },
+      { name: 'primary_weights', type: 'object', req: false, desc: '主池各 provider 的调度权重（>=1），未列出的用 1', in: 'body' },
+      { name: 'backups', type: 'array<object>', req: false, desc: '备用池配置', in: 'body' },
+    ], body: '{"type":"static","min_alive_ratio":0.5,"username":"residential","password":"new-pass","primary":["mock-sticky","mock-ippool"],"primary_weights":{"mock-sticky":2}}',
+    curl: 'curl -X PUT {HOST}/api/v1/admin/groups/residential \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"type":"static","min_alive_ratio":0.5,"username":"residential","password":"new-pass","primary":["mock-sticky","mock-ippool"]}\'',
+    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/groups/residential",\n    json={"type": "static", "min_alive_ratio": 0.5, "username": "residential", "password": "new-pass", "primary": ["mock-sticky", "mock-ippool"]},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'DELETE', path: '/api/v1/admin/groups', auth: 'admin', title: '删除调度分组（热生效）',
+    params: [{ name: 'name', type: 'string', req: true, desc: '分组名（query 参数）', in: 'query' }], body: '',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/groups?name=residential"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/groups",\n    params={"name": "residential"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/accounts', auth: 'admin', title: '账户列表',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/accounts',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/accounts", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "accounts": [{"name": "admin", "role": "admin", "groups": [], "enabled": true}]\n}',
+    resp_fields: [
+      { name: 'accounts', type: 'array<object>', desc: '账户列表' },
+      { name: 'accounts[].name', type: 'string', desc: '账户名' },
+      { name: 'accounts[].role', type: 'string', desc: '角色，admin 或 user' },
+      { name: 'accounts[].groups', type: 'array<string>', desc: '可用的调度分组名列表' },
+      { name: 'accounts[].enabled', type: 'boolean', desc: '是否启用' },
+    ],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/accounts', auth: 'admin', title: '新增账户（Token 自动生成）',
+    params: [
+      { name: 'name', type: 'string', req: true, desc: '账户名', in: 'body' },
+      { name: 'password', type: 'string', req: false, desc: '密码（用于登录）', in: 'body' },
+      { name: 'role', type: 'string', req: true, desc: '角色，admin 或 user', in: 'body' },
+      { name: 'groups', type: 'array<string>', req: false, desc: '可用的调度分组名列表', in: 'body' },
+      { name: 'enabled', type: 'boolean', req: false, desc: '是否启用，默认 true', in: 'body' },
+    ], body: '{"name":"spider01","password":"pass123","role":"user","groups":["charlespikachu-free"],"enabled":true}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/accounts \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123","role":"user","groups":["charlespikachu-free"],"enabled":true}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/accounts",\n    json={"name": "spider01", "password": "pass123", "role": "user", "groups": ["charlespikachu-free"], "enabled": True},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'PUT', path: '/api/v1/admin/accounts/{name}', auth: 'admin', title: '编辑账户',
+    params: [
+      { name: 'name', type: 'string', req: true, desc: '账户名（路径参数）', in: 'path' },
+      { name: 'password', type: 'string', req: false, desc: '新密码，留空保持不变', in: 'body' },
+      { name: 'role', type: 'string', req: false, desc: '角色，admin 或 user', in: 'body' },
+      { name: 'groups', type: 'array<string>', req: false, desc: '可用的调度分组名列表', in: 'body' },
+      { name: 'enabled', type: 'boolean', req: false, desc: '是否启用', in: 'body' },
+    ], body: '{"password":"newpass","role":"admin","groups":["residential"],"enabled":false}',
+    curl: 'curl -X PUT {HOST}/api/v1/admin/accounts/spider01 \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"password":"newpass","role":"admin","groups":["residential"],"enabled":false}\'',
+    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/accounts/spider01",\n    json={"password": "newpass", "role": "admin", "groups": ["residential"], "enabled": False},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'DELETE', path: '/api/v1/admin/accounts', auth: 'admin', title: '删除账户',
+    params: [{ name: 'name', type: 'string', req: true, desc: '账户名（query 参数）', in: 'query' }], body: '',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/accounts?name=spider01"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/accounts",\n    params={"name": "spider01"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/usage', auth: 'admin', title: '调用统计',
+    params: [{ name: 'account', type: 'string', req: false, desc: '只看某账户', in: 'query' }], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/usage',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/usage", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "accounts": [{"account": "admin", "total": 128, "ok": 120}]\n}',
+    resp_fields: [
+      { name: 'accounts', type: 'array<object>', desc: '按账户汇总的调用统计' },
+      { name: 'accounts[].account', type: 'string', desc: '账户名' },
+      { name: 'accounts[].total', type: 'integer', desc: '调用总次数' },
+      { name: 'accounts[].ok', type: 'integer', desc: '成功次数' },
+    ],
+  },
+  {
+    method: 'GET', path: '/api/v1/admin/alerts', auth: 'admin', title: '告警配置',
+    params: [], body: '',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/alerts',
+    py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/alerts", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
+    response: '{\n  "webhooks": [],\n  "email": {"smtp_host": "", "smtp_port": 587, "username": "", "to": [], "events": []},\n  "dedup_seconds": 300,\n  "monitor_interval_s": 15,\n  "recover_interval_s": 3600\n}',
+    resp_fields: [
+      { name: 'webhooks', type: 'array<object>', desc: 'Webhook 通知列表' },
+      { name: 'email', type: 'object', desc: '邮件通知配置' },
+      { name: 'email.smtp_host', type: 'string', desc: 'SMTP 服务器' },
+      { name: 'email.smtp_port', type: 'integer', desc: 'SMTP 端口' },
+      { name: 'email.username', type: 'string', desc: 'SMTP 用户名' },
+      { name: 'email.to', type: 'array<string>', desc: '收件人列表' },
+      { name: 'email.events', type: 'array<string>', desc: '订阅的事件类型' },
+      { name: 'dedup_seconds', type: 'integer', desc: '告警去重窗口秒数' },
+      { name: 'monitor_interval_s', type: 'integer', desc: 'Provider 状态监控间隔秒数' },
+      { name: 'recover_interval_s', type: 'integer', desc: '故障恢复自检间隔秒数' },
+    ],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/alerts/webhooks', auth: 'admin', title: '添加 Webhook（支持密钥与备注）',
+    params: [
+      { name: 'url', type: 'string', req: true, desc: 'Webhook 地址（如钉钉机器人）', in: 'body' },
+      { name: 'secret', type: 'string', req: false, desc: '校验密钥，发送时作为 X-Webhook-Secret 请求头', in: 'body' },
+      { name: 'events', type: 'array<string>', req: false, desc: '订阅的事件类型，如 provider_down、pool_exhausted', in: 'body' },
+      { name: 'remark', type: 'string', req: false, desc: '备注，用于区分不同 webhook 的用途', in: 'body' },
+    ], body: '{"url":"https://oapi.dingtalk.com/robot/send?access_token=xxx","secret":"my-secret","events":["provider_down","pool_exhausted"],"remark":"钉钉告警群"}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/alerts/webhooks \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"url":"https://oapi.dingtalk.com/robot/send?access_token=xxx","secret":"my-secret","events":["provider_down"],"remark":"钉钉告警群"}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/alerts/webhooks",\n    json={"url": "https://oapi.dingtalk.com/robot/send?access_token=xxx", "secret": "my-secret", "events": ["provider_down"], "remark": "钉钉告警群"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'PUT', path: '/api/v1/admin/alerts/webhooks', auth: 'admin', title: '编辑 Webhook（含密钥与备注）',
+    params: [
+      { name: 'old_url', type: 'string', req: true, desc: '原 Webhook URL，用于定位要编辑的条目', in: 'body' },
+      { name: 'url', type: 'string', req: true, desc: '新的 Webhook 地址', in: 'body' },
+      { name: 'secret', type: 'string', req: false, desc: '校验密钥（会覆盖原值）', in: 'body' },
+      { name: 'events', type: 'array<string>', req: false, desc: '订阅的事件类型', in: 'body' },
+      { name: 'remark', type: 'string', req: false, desc: '备注', in: 'body' },
+    ], body: '{"old_url":"https://oapi.dingtalk.com/robot/send?access_token=old","url":"https://oapi.dingtalk.com/robot/send?access_token=new","secret":"my-secret","events":["provider_down"],"remark":"钉钉告警群"}',
+    curl: 'curl -X PUT {HOST}/api/v1/admin/alerts/webhooks \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"old_url":"https://oapi.dingtalk.com/robot/send?access_token=old","url":"https://oapi.dingtalk.com/robot/send?access_token=new","secret":"my-secret","events":["provider_down"],"remark":"钉钉告警群"}\'',
+    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/alerts/webhooks",\n    json={"old_url": "https://oapi.dingtalk.com/robot/send?access_token=old", "url": "https://oapi.dingtalk.com/robot/send?access_token=new", "secret": "my-secret", "events": ["provider_down"], "remark": "钉钉告警群"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'DELETE', path: '/api/v1/admin/alerts/webhooks', auth: 'admin', title: '删除 Webhook',
+    params: [{ name: 'url', type: 'string', req: true, desc: '要删除的 Webhook URL', in: 'query' }], body: '',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/alerts/webhooks?url=https://oapi.dingtalk.com/robot/send%3Faccess_token%3Dxxx"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/alerts/webhooks",\n    params={"url": "https://oapi.dingtalk.com/robot/send?access_token=xxx"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/alerts/email', auth: 'admin', title: '更新邮件通知配置',
+    params: [
+      { name: 'smtp_host', type: 'string', req: false, desc: 'SMTP 服务器', in: 'body' },
+      { name: 'smtp_port', type: 'integer', req: false, desc: 'SMTP 端口', in: 'body' },
+      { name: 'username', type: 'string', req: false, desc: 'SMTP 用户名', in: 'body' },
+      { name: 'password', type: 'string', req: false, desc: 'SMTP 密码', in: 'body' },
+      { name: 'from', type: 'string', req: false, desc: '发件人地址', in: 'body' },
+      { name: 'to', type: 'array<string>', req: false, desc: '收件人列表', in: 'body' },
+      { name: 'events', type: 'array<string>', req: false, desc: '订阅的事件类型', in: 'body' },
+      { name: 'use_tls', type: 'boolean', req: false, desc: '是否使用 TLS', in: 'body' },
+    ], body: '{"smtp_host":"smtp.example.com","smtp_port":587,"username":"u","password":"p","from":"alert@example.com","to":["ops@example.com"],"events":["provider_down"],"use_tls":false}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/alerts/email \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"smtp_host":"smtp.example.com","smtp_port":587,"username":"u","password":"p","to":["ops@example.com"]}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/alerts/email",\n    json={"smtp_host": "smtp.example.com", "smtp_port": 587, "username": "u", "password": "p", "to": ["ops@example.com"]},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/alerts/dedup', auth: 'admin', title: '更新告警去重窗口',
+    params: [{ name: 'dedup_seconds', type: 'integer', req: true, desc: '去重窗口秒数', in: 'body' }], body: '{"dedup_seconds":300}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/alerts/dedup \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"dedup_seconds":300}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/alerts/dedup",\n    json={"dedup_seconds": 300},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/alerts/monitor', auth: 'admin', title: '更新 Provider 状态监控间隔',
+    params: [{ name: 'monitor_interval_s', type: 'integer', req: true, desc: '监控间隔秒数', in: 'body' }], body: '{"monitor_interval_s":15}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/alerts/monitor \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"monitor_interval_s":15}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/alerts/monitor",\n    json={"monitor_interval_s": 15},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'POST', path: '/api/v1/admin/alerts/recover', auth: 'admin', title: '更新故障恢复自检间隔',
+    params: [{ name: 'recover_interval_s', type: 'integer', req: true, desc: '恢复自检间隔秒数', in: 'body' }], body: '{"recover_interval_s":3600}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/alerts/recover \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"recover_interval_s":3600}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/alerts/recover",\n    json={"recover_interval_s": 3600},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true\n}',
+    resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
+  },
+  {
+    method: 'ALL', path: '代理网关 (HTTP Proxy Gateway)', auth: 'anonymous', title: '通过代理网关直接中转请求（分组凭证认证）',
+    desc: '两种用法：1) 原生 HTTP 正向代理，在 server.gateway_listen 端口（如 :10000）上运行，客户端用 用户名:密码@host:10000 作为代理地址；2) 路径式代理端点 GET /api/v1/gw?url=<目标>，带 Basic 凭证（Authorization 或 Proxy-Authorization 头），适用于只转发普通路径请求的预览反代环境。',
+    params: [
+      { name: 'user:pass', type: 'string', req: true, desc: 'URL 形式凭证，绑定一个调度分组；在分组配置的网关用户名/密码', in: 'path' },
+      { name: '目标 URL', type: 'string', req: true, desc: '任意 http/https 目标，如 http://baidu.com', in: 'path' },
+    ], body: '',
+    curl: 'curl -x 用户名:密码@{HOST}:10000 http://baidu.com\n# 路径式（公网可用）：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"',
+    py: 'import requests\n\nr = requests.get("http://baidu.com", proxies={"http": "http://用户名:密码@{HOST}:10000", "https": "http://用户名:密码@{HOST}:10000"})\nprint(r.status_code)\n\n# 路径式（公网可用）：\nr2 = requests.get(\n    "{HOST}/api/v1/gw",\n    params={"url": "http://baidu.com"},\n    auth=("用户名", "密码"),\n)\nprint(r2.status_code)',
+    response: '<目标站点响应内容>',
+    resp_fields: [
+      { name: 'HTTP(S) 响应', type: 'any', desc: '网关从本组取一个实时可用代理转发请求，返回目标站点的真实响应；主池/备用池自动切换对客户端透明' },
+    ],
+  },
+];
+
+function apidocVisibleEndpoints() {
+  return APIDOC_ENDPOINTS.map((ep, i) => ({ ep, i })).filter(x => !(x.ep.auth === 'admin' && !isAdmin()));
+}
+
+function authBadge(auth) {
+  if (auth === 'admin') return '<span class="badge tunnel">admin</span>';
+  if (auth === 'anonymous') return '<span class="badge on">匿名</span>';
+  return '<span class="badge kind">token</span>';
+}
+
+function methodCls(method) {
+  return 'method-' + method.toLowerCase();
+}
+
+function renderAPIDoc() {
+  renderAPIDocList();
+  if (apiDocSel >= 0) renderAPIDocDetail(apiDocSel);
+  else showAPIDocPlaceholder();
+}
+
+function renderAPIDocList() {
+  const q = (document.getElementById('apidoc-search').value || '').trim().toLowerCase();
+  const eps = apidocVisibleEndpoints().filter(({ ep }) =>
+    !q || ep.path.toLowerCase().includes(q) || ep.title.toLowerCase().includes(q) || ep.method.toLowerCase().includes(q)
+  );
+  const menu = document.getElementById('apidoc-menu');
+  if (!eps.length) {
+    menu.innerHTML = '<div class="apidoc-item" style="cursor:default;"><div class="meta"><div class="desc">无匹配接口</div></div></div>';
+    return;
+  }
+  menu.innerHTML = eps.map(({ ep, i }) => `
+    <div class="apidoc-item ${i === apiDocSel ? 'active' : ''}" onclick="selectAPIDoc(${i})">
+      <span class="m ${methodCls(ep.method)}">${esc(ep.method)}</span>
+      <div class="meta">
+        <div class="path">${esc(ep.path)}</div>
+        <div class="desc">${esc(ep.title)}</div>
+      </div>
+    </div>`).join('');
+}
+
+function showAPIDocPlaceholder() {
+  const ph = document.getElementById('apidoc-placeholder');
+  const body = document.getElementById('apidoc-detail-body');
+  ph.style.display = '';
+  body.style.display = 'none';
+}
+
+function selectAPIDoc(i) {
+  apiDocSel = i;
+  renderAPIDocList();
+  renderAPIDocDetail(i);
+}
+
+function renderAPIDocDetail(i) {
+  const ph = document.getElementById('apidoc-placeholder');
+  const body = document.getElementById('apidoc-detail-body');
+  ph.style.display = 'none';
+  body.style.display = '';
+
+  const all = APIDOC_ENDPOINTS;
+  if (i < 0 || i >= all.length) { showAPIDocPlaceholder(); return; }
+  const ep = all[i];
+  const HOST = window.location.origin || 'http://HOST';
+  const TOKEN = token || '<your-token>';
+  const lang = apiDocLang;
+  const code = (lang === 'curl' ? ep.curl : ep.py)
+    .split('{HOST}').join(HOST)
+    .split('{TOKEN}').join(TOKEN);
+  const respCode = ep.response.split('{HOST}').join(HOST).split('{TOKEN}').join(TOKEN);
+
+  const typeTag = t => `<span class="badge kind" style="font-weight:400;">${esc(t)}</span>`;
+  const reqTag = r => r ? '<span style="color:var(--red);">是</span>' : '<span style="color:var(--muted);">否</span>';
+
+  const paramsHtml = ep.params.length
+    ? `<div class="apidoc-section"><h3>请求参数</h3>
+        <table>
+          <thead><tr><th>参数</th><th>位置</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+          <tbody>${ep.params.map(p => `<tr>
+            <td><code>${esc(p.name)}</code></td>
+            <td>${esc(p.in || 'query')}</td>
+            <td>${typeTag(p.type || 'string')}</td>
+            <td>${reqTag(p.req)}</td>
+            <td>${esc(p.desc)}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`
+    : '';
+
+  const respFieldsHtml = (ep.resp_fields && ep.resp_fields.length)
+    ? `<div class="apidoc-section"><h3>响应字段说明</h3>
+        <table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>${ep.resp_fields.map(f => `<tr>
+            <td><code>${esc(f.name)}</code></td>
+            <td>${typeTag(f.type)}</td>
+            <td>${esc(f.desc)}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`
+    : '';
+
+  body.innerHTML = `
+    <div class="card" style="padding:20px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:18px;">
+          <span style="color:${ep.method === 'GET' ? 'var(--green)' : (ep.method === 'DELETE' ? 'var(--red)' : (ep.method === 'PUT' ? 'var(--blue)' : 'var(--amber)'))}">${ep.method}</span>
+          <span class="mono" style="font-size:15px;">${esc(ep.path)}</span>
+        </h2>
+        ${authBadge(ep.auth)}
+      </div>
+      <div style="color:var(--muted);font-size:13px;line-height:1.7;margin-bottom:16px;">${esc(ep.title)}</div>
+
+      ${paramsHtml}
+
+      ${ep.body ? `<div class="apidoc-section"><h3>请求体 (JSON)</h3><pre class="code-block">${esc(ep.body)}</pre></div>` : ''}
+
+      <div class="apidoc-section">
+        <h3>调用案例 <span style="color:var(--muted);font-weight:normal;font-size:12px;">当前 token：<span class="mono">${esc(TOKEN)}</span></span></h3>
+        <div class="lang-tabs">
+          <span class="lang-tab ${lang === 'curl' ? 'active' : ''}" onclick="setApiLang('curl')">curl</span>
+          <span class="lang-tab ${lang === 'python' ? 'active' : ''}" onclick="setApiLang('python')">Python requests</span>
+          <button class="btn btn-sm btn-green" style="margin-left:auto;" onclick="copyText(this, 'code')">一键复制</button>
+        </div>
+        <pre class="code-block" id="code">${esc(code)}</pre>
+      </div>
+
+      ${respFieldsHtml}
+
+      <div class="apidoc-section">
+        <h3>响应案例</h3>
+        <div class="lang-tabs">
+          <button class="btn btn-sm btn-green" style="margin-left:auto;" onclick="copyText(this, 'resp')">一键复制</button>
+        </div>
+        <pre class="code-block" id="resp">${esc(respCode)}</pre>
+      </div>
+    </div>`;
+}
+
+function setApiLang(lang) {
+  apiDocLang = lang;
+  renderAPIDocDetail(apiDocSel);
+}
+
+async function copyText(btn, id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  try {
+    await navigator.clipboard.writeText(el.textContent);
+    toast('已复制');
+  } catch (e) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+    toast('已复制');
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleTimeString('zh-CN');
+}
+
+document.getElementById('provider-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('provider-modal')) closeModal();
+});
+document.getElementById('group-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('group-modal')) closeGroupModal();
+});
+document.getElementById('group-modal').addEventListener('change', e => {
+  if (e.target.type !== 'checkbox') return;
+  const card = e.target.closest('.prov-card, .region-pill');
+  if (card) card.classList.toggle('on', e.target.checked);
+  const provCard = e.target.closest('.prov-card');
+  if (provCard) togglePrimaryPick(e.target.checked, e.target.value);
+});
+document.getElementById('webhook-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('webhook-modal')) closeWebhookModal();
+});
+document.getElementById('acct-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('acct-modal')) closeAccountModal();
+});
+document.getElementById('login-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('login-modal')) hideLogin();
+});
+
+initAuth();
+refreshAll();
+setInterval(refreshAll, 3000);
+</script>
+</body>
+</html>

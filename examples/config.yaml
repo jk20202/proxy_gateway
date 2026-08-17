@@ -1,0 +1,113 @@
+server:
+  listen: ":8080"
+  read_timeout_ms: 3000
+  write_timeout_ms: 3000
+  max_workers: 8192
+
+health_check:
+  interval_s: 30
+  timeout_ms: 6000           # 需测出免费代理 5s 内的真实延迟
+  concurrency: 256           # 免费代理量级大，并发调高避免检测积压
+  check_url: "http://httpbin.org/ip"
+  max_fails: 3
+  rebuild_interval_ms: 200
+
+providers:
+  # 隧道型代理：固定网关 + 认证，平台侧自动轮换出口 IP
+  - name: "aliyun-tunnel"
+    type: "tunnel"
+    enabled: true
+    weight: 100
+    tunnel:
+      scheme: "http"
+      gateway: "tunnel1.proxy.example.com"
+      port: 8080
+      username: "user1"
+      password: "pass1"
+
+  - name: "aws-tunnel"
+    type: "tunnel"
+    enabled: true
+    weight: 80
+    tunnel:
+      scheme: "http"
+      gateway: "tunnel2.proxy.example.com"
+      port: 8080
+      username: "user2"
+      password: "pass2"
+
+  # IP 池型代理：调用平台提取 API 拿到一批 IP:Port
+  - name: "proxy-cn-ip"
+    type: "ip_pool"
+    enabled: true
+    weight: 50
+    check_url: "http://httpbin.org/ip"
+    ip_pool:
+      extract_url: "https://api.proxycn.com/get"
+      format: "text"
+      refresh_interval_s: 60
+      expire_after_s: 600
+      username: ""
+      password: ""
+      max_proxies: 500
+
+  # 免费代理源：采集自公共免费源，只保留上报延迟低于 max_speed_ms 的 HTTP 代理；
+  # 免费代理不可用即删（健康检测一次失败，或实测延迟超过 delete_latency_ms）。
+  - name: "freeproxy"
+    type: "free"
+    enabled: true
+    weight: 10
+    check_url: "http://www.gstatic.com/generate_204"
+    free:
+      feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
+      refresh_interval_s: 600
+      expire_after_s: 600
+      max_proxies: 2000
+      max_speed_ms: 2000
+      delete_latency_ms: 5000
+
+alerts:
+  dedup_seconds: 300          # 同一事件去重窗口
+  monitor_interval_s: 15      # provider 状态监控周期
+  recover_interval_s: 3600    # 故障恢复自检间隔（provider 掉线后每隔此秒数强制刷新尝试自愈；0=关闭）
+  # webhooks:
+  #   - url: "https://oapi.dingtalk.com/robot/send?access_token=xxx"
+  #     events: ["provider_down", "provider_recovered", "pool_exhausted", "refresh_failed"]
+  # email:
+  #   smtp_host: "smtp.example.com"
+  #   smtp_port: 587
+  #   username: "alert@example.com"
+  #   password: "your-password"
+  #   from: "alert@example.com"
+  #   to: ["ops@example.com"]
+
+# 调度分组：主池存活率跌破 min_alive_ratio 时依次切换备用池；组内全非隧道型用 SWRR
+groups:
+  - name: "default"
+    type: "static"
+    min_alive_ratio: 0.5
+    primary: ["proxy-cn-ip"]
+    backups:
+      - name: "tunnel-fallback"
+        min_alive_ratio: 0
+        providers: ["aliyun-tunnel", "aws-tunnel"]
+
+  # 免费代理分组：延迟低于 2 秒的才收，一次检测失败/延迟>5s 即删
+  - name: "free"
+    type: "free"
+    min_alive_ratio: 0
+    primary: ["freeproxy"]
+
+# 账户：配置后 Web 与 API 均需鉴权；留空则关闭
+# accounts:
+#   - name: "admin"
+#     password: "change-me"
+#     token: "generate-a-random-token"
+#     role: "admin"
+#     enabled: true
+
+# SQLite 调用记录：path 留空则关闭
+# db:
+#   path: "usage.db"
+#   batch_size: 200
+#   flush_interval_ms: 1000
