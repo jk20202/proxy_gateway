@@ -181,3 +181,65 @@ func hostPort(t *testing.T, addr net.Addr) (string, int) {
 	}
 	return strings.Trim(h, "[]"), port
 }
+
+// TestDirectTunnel returns the single shared upstream for a pure-tunnel group.
+func TestDirectTunnel(t *testing.T) {
+	p := pool.NewPool()
+	p.SetGroups(groups())
+	pr := &model.Proxy{ID: "tun1", Provider: "p-tunnel", Kind: model.KindTunnel, Scheme: "http", Host: "tunnel.example.com", Port: 3128, Username: "upuser", Password: "uppass"}
+	pr.Alive.Store(true)
+	p.Add(pr)
+	src := func() []config.GroupCfg {
+		return []config.GroupCfg{
+			{Name: "tgroup", Type: "static", Primary: []string{"p-tunnel"}, Username: "tu", Password: "tp"},
+		}
+	}
+	g := newTestGateway(p, src)
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/direct", nil)
+	req.Header.Set("Proxy-Authorization", basicAuthHeader("tu", "tp"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"direct":"http://upuser:uppass@tunnel.example.com:3128"`) {
+		t.Fatalf("want direct tunnel address in response, got %s", body)
+	}
+}
+
+// TestDirectRejectsMixed returns direct:null when the group mixes tunnel and
+// non-tunnel providers, since those must keep being relayed.
+func TestDirectRejectsMixed(t *testing.T) {
+	p := pool.NewPool()
+	p.SetGroups(groups())
+	tun := &model.Proxy{ID: "tun1", Provider: "p-tunnel", Kind: model.KindTunnel, Scheme: "http", Host: "tunnel.example.com", Port: 3128}
+	tun.Alive.Store(true)
+	p.Add(tun)
+	ipp := &model.Proxy{ID: "ipp1", Provider: "p-ippool", Kind: model.KindIPPool, Scheme: "http", Host: "1.2.3.4", Port: 8080}
+	ipp.Alive.Store(true)
+	p.Add(ipp)
+	src := func() []config.GroupCfg {
+		return []config.GroupCfg{
+			{Name: "mg", Type: "static", Primary: []string{"p-ippool"}, Backups: []config.BackupPool{{Name: "b", Providers: []string{"p-tunnel"}}}, Username: "mu", Password: "mp"},
+		}
+	}
+	g := newTestGateway(p, src)
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/direct", nil)
+	req.Header.Set("Proxy-Authorization", basicAuthHeader("mu", "mp"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"direct":null`) {
+		t.Fatalf("want direct:null for mixed group, got %s", body)
+	}
+}

@@ -69,6 +69,9 @@ type Pool struct {
 	groupsCfg []config.GroupCfg
 	swrrMu    sync.Mutex
 	swrr      map[string]int64 // proxyID -> current weight (SWRR)
+
+	stateSinkMu sync.RWMutex
+	stateSink   func(pr *model.Proxy, removed bool)
 }
 
 type stickyEntry struct {
@@ -84,6 +87,25 @@ func NewPool() *Pool {
 	}
 	p.snap.Store(&Snapshot{})
 	return p
+}
+
+// SetStateSink registers a callback invoked whenever a proxy's runtime state
+// changes (added, removed, latency/alive/country updated). It is used to mirror
+// high-frequency proxy state into Redis. Passing nil disables it.
+func (p *Pool) SetStateSink(fn func(pr *model.Proxy, removed bool)) {
+	p.stateSinkMu.Lock()
+	p.stateSink = fn
+	p.stateSinkMu.Unlock()
+}
+
+// notifyState fires the state sink for a proxy. Best-effort and non-blocking.
+func (p *Pool) notifyState(pr *model.Proxy, removed bool) {
+	p.stateSinkMu.RLock()
+	fn := p.stateSink
+	p.stateSinkMu.RUnlock()
+	if fn != nil && pr != nil {
+		fn(pr, removed)
+	}
 }
 
 // SetGroups installs the explicit group scheduling configuration and rebuilds
@@ -118,21 +140,25 @@ func (p *Pool) Add(pr *model.Proxy) {
 		old.MinAliveRatio = pr.MinAliveRatio
 		old.StickySeconds = pr.StickySeconds
 		p.mu.Unlock()
+		p.notifyState(old, false)
 		return
 	}
 	p.proxies[pr.ID] = pr
 	p.mu.Unlock()
 	p.Rebuild()
+	p.notifyState(pr, false)
 }
 
 func (p *Pool) Remove(id string) bool {
 	p.mu.Lock()
-	if _, ok := p.proxies[id]; ok {
+	pr, ok := p.proxies[id]
+	if ok {
 		delete(p.proxies, id)
 		p.mu.Unlock()
 		p.ClearSticky(id)
 		p.clearSWRR(id)
 		p.Rebuild()
+		p.notifyState(pr, true)
 		return true
 	}
 	p.mu.Unlock()
@@ -178,6 +204,7 @@ func (p *Pool) SetCountry(id, country string) {
 		pr.Country = country
 		p.mu.Unlock()
 		p.Rebuild()
+		p.notifyState(pr, false)
 		return
 	}
 	p.mu.Unlock()
@@ -623,6 +650,7 @@ func (p *Pool) MarkFailed(id string, latencyMS int64) {
 			pr.Alive.Store(false)
 			p.Rebuild()
 		}
+		p.notifyState(pr, false)
 	}
 }
 
@@ -637,6 +665,7 @@ func (p *Pool) MarkSuccess(id string, latencyMS int64) {
 			pr.Alive.Store(true)
 			p.Rebuild()
 		}
+		p.notifyState(pr, false)
 	}
 }
 
@@ -644,6 +673,7 @@ func (p *Pool) SetAlive(id string, alive bool) {
 	if pr := p.Get(id); pr != nil {
 		pr.Alive.Store(alive)
 		p.Rebuild()
+		p.notifyState(pr, false)
 	}
 }
 

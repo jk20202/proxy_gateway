@@ -1,0 +1,89 @@
+# proxy-pool 一键部署：MySQL + Redis + 应用
+# 用法：
+#   docker compose up -d
+# 停止：docker compose down
+# 清空数据（慎用）：docker compose down -v
+#
+# 对外端口：
+#   8080  Web 管理控制台 / 消费 API
+#   10000 代理网关（curl -x 用户:密码@主机:10000）
+#
+# 修改配置：
+#   - 应用配置：编辑本目录 config.docker.yaml，然后 docker compose restart proxy-pool
+#   - MySQL/Redis 地址与密码：修改 config.docker.yaml 的 storage 段
+#   - 数据库口令初始化：改下方 MYSQL_* 环境变量 + config.docker.yaml 的 user/pass 保持一致
+#
+# 转线上（不使用本仓库的 MySQL/Redis 容器）：把 config.docker.yaml 中
+# storage.mysql.addr / storage.redis.addr 改成你的线上地址，注释掉下方对应服务即可。
+
+name: proxy-pool
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: proxy-pool-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass_change_me
+      MYSQL_DATABASE: proxy_pool
+      MYSQL_USER: proxy
+      MYSQL_PASSWORD: proxy_pass
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pproxy_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - proxy-pool-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: proxy-pool-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - proxy-pool-net
+
+  proxy-pool:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: proxy-pool:latest
+    container_name: proxy-pool
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "10000:10000"
+    volumes:
+      - ./config.docker.yaml:/app/config.yaml:ro
+      - usage_data:/app/data
+    networks:
+      - proxy-pool-net
+
+volumes:
+  mysql_data:
+  redis_data:
+  usage_data:
+
+networks:
+  proxy-pool-net:
+    driver: bridge

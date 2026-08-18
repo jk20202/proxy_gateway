@@ -21,32 +21,29 @@ alerts:
 
 # 代理 IP 归属查询：入池后自动为每个代理标记国家/地区（用于分组的国内/海外/指定国家过滤）。
 # 通过 ip-api.com 免费批量接口查询；私有/内网 IP 会被跳过（保持未知）。
-# 中国内地=国内(CN)；其余全部=海外，含中国香港(HK)。
 geo:
   enabled: true
   # url: "http://ip-api.com/batch"   # 批量归属查询端点，可替换为自建服务
-  enrich_interval_s: 60               # 每隔多少秒扫描一次未标记国家的代理并回填
+  enrich_interval_s: 60
 
 # 账户：配置后 Web 与消费 API 均需鉴权（Web 用 name+password 登录，消费 API 用 token）。
-# 留空数组则鉴权关闭（不推荐生产使用）。
+# 首次启动会用此处的账户播种到 MySQL；之后以 MySQL 为准。
 accounts:
   - name: "admin"
     password: "admin123"
     token: "replace-with-a-random-api-token"
-    role: "admin"            # admin 可管理全部；user 仅可调用消费 API
+    role: "admin"
     enabled: true
-    groups: []               # 该账户可用的调度分组，留空=全部
+    groups: []
 
 # SQLite 调用记录（每账户调用统计）。path 留空则关闭。
 db:
-  path: "usage.db"
+  path: "/app/data/usage.db"
   batch_size: 200
   flush_interval_ms: 1000
 
 # 调度分组：主池存活率跌破 min_alive_ratio 时自动切换备用池（依次尝试，首个可用即停）。
-# 组内 provider 全部为非隧道型（ip_pool/sticky/free）时用平滑加权轮询(SWRR)，含隧道型则加权随机。
-# username/password：网关凭证。配置后即可用 `curl -x 用户名:密码@域名:10000 <目标URL>` 直接经由本组代理转发请求，
-# 网关按凭证匹配分组并从该组实时取一个可用代理中转，组内主备池自动切换对客户端透明。
+# 首次启动会用此处的分组播种到 MySQL；之后以 MySQL 为准。
 groups:
   - name: "residential"
     type: "static"
@@ -54,35 +51,28 @@ groups:
     username: "residential"       # 网关用户名（可选，不配则不可通过网关访问本组）
     password: "residential-pass"
     primary: ["mock-sticky", "mock-ippool"]
-    primary_weights:              # 主池中各 provider 的调度权重（已从 Provider 层迁移到分组层）
-      mock-sticky: 2              # 缺省 1；权重越大流量分配越多
+    primary_weights:
+      mock-sticky: 2              # 权重已改为使用率百分比；此处兼容旧相对权重，首次播种后以 MySQL 为准
       mock-ippool: 1
     backups:
       - name: "fallback-tunnel"
         min_alive_ratio: 0
         providers: ["mock-tunnel"]
 
-  # 免费代理分组：按"域名相关+free"命名，采集自公共免费源，延迟低于 3 秒的才收，
-  # 每分钟检测一次，实测延迟超过 3 秒或不可用即删；无可用时同样支持备用池兜底。
   - name: "charlespikachu-free"
     type: "free"
     min_alive_ratio: 0
-    username: "free"              # 网关用户名
+    username: "free"
     password: "free-pass"
     primary: ["charlespikachu-free"]
-    # backups:
-    #   - name: "fallback-paid"
-    #     min_alive_ratio: 0
-    #     providers: ["mock-tunnel"]
 
 providers:
   # 隧道型代理：固定网关 + 认证，平台侧自动轮换出口 IP
-  # check_interval_s 为该 provider 的检测频率（池内 IP 多久检测一次延迟，0=用全局 health_check.interval_s）
   - name: "mock-tunnel"
     type: "tunnel"
     enabled: true
     min_alive_ratio: 0.1
-    check_interval_s: 60          # 检测频率：每 60s 检测一次延迟
+    check_interval_s: 60
     check_url: "http://127.0.0.1:10002/"
     country: "US"                 # 显式指定国家（海外），入池直接打标，跳过 IP 归属查询
     tunnel:
@@ -99,11 +89,11 @@ providers:
     min_alive_ratio: 0
     check_interval_s: 60
     check_url: "http://127.0.0.1:10002/"
-    country: "CN"                 # 国内
+    country: "CN"
     ip_pool:
       extract_url: "http://127.0.0.1:10003/get"
       format: "text"
-      refresh_interval_s: 30      # 提取频率：每 30s 从提取 API 拉一次新 IP
+      refresh_interval_s: 30
       expire_after_s: 600
       max_proxies: 100
 
@@ -111,43 +101,38 @@ providers:
   - name: "mock-sticky"
     type: "sticky"
     enabled: true
-    sticky_seconds: 60       # 粘性时长：60=1分钟、300=5分钟，可任意设置
+    sticky_seconds: 60
     check_interval_s: 60
     check_url: "http://127.0.0.1:10002/"
-    country: "HK"                 # 中国香港（也属海外）
+    country: "HK"
     ip_pool:
       extract_url: "http://127.0.0.1:10003/get"
       format: "text"
-      refresh_interval_s: 120     # 提取频率
+      refresh_interval_s: 120
       expire_after_s: 3600
       max_proxies: 100
 
   # 免费代理源：采集自公共免费源，只保留上报延迟低于 max_speed_ms 的 HTTP 代理。
-  # 免费代理不可用即删（健康检测一次失败，或实测延迟超过 delete_latency_ms），不告警。
-  # 不设上限、不过期：只要代理还能用、延迟达标就一直保留，按检测频率自动淘汰超标者。
   - name: "charlespikachu-free"
     type: "free"
     enabled: true
     min_alive_ratio: 0
-    check_interval_s: 60          # 检测频率：池内代理每 60s 检测一次延迟
-    check_url: "http://www.gstatic.com/generate_204"   # 免费代理的真实连通性检测目标（204 轻量探测）
+    check_interval_s: 60
+    check_url: "http://www.gstatic.com/generate_204"
     free:
       feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
-      refresh_interval_s: 600               # 采集频率：每 10 分钟重新采集一次
-      max_speed_ms: 3000                    # 只收上报延迟低于 3 秒的（页面上自己的测速）
-      delete_latency_ms: 3000               # 每次检测实测延迟超过 3 秒的直接删除
+      refresh_interval_s: 600
+      max_speed_ms: 3000
+      delete_latency_ms: 3000
 
 # 持久化存储：MySQL 存低频设置（账户/分组/provider 配置），Redis 缓存高频代理状态（延迟/国家/存活）。
-# 两者均可选；不配置则退回原行为（账户仅内存、分组持久化到 groups.json）。
+# 本文件是 docker-compose 使用的版本：addr 指向 compose 内网服务名。
+# 转线上：把 addr 改成你的 MySQL/Redis 地址即可（如 mysql.example.com:3306），无需改代码。
 storage:
   mysql:
-    # addr 与 user/pass/db 组合成 DSN；也可直接用 dsn 指定
-    addr: "127.0.0.1:3306"
+    addr: "mysql:3306"          # compose 服务名；本地本机可用 127.0.0.1:3306
     user: "proxy"
     pass: "proxy_pass"
     db: "proxy_pool"
-    # dsn: "proxy:proxy_pass@tcp(127.0.0.1:3306)/proxy_pool"
   redis:
-    addr: "127.0.0.1:6379"
-    # password: ""
-    # db: 0
+    addr: "redis:6379"          # compose 服务名；本地本机可用 127.0.0.1:6379

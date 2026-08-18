@@ -190,6 +190,12 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
 .pagination { display: flex; align-items: center; gap: 10px; justify-content: flex-end; color: var(--muted); font-size: 12px; }
 .pagination button { background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 3px 10px; border-radius: 5px; cursor: pointer; }
 .weight-input { width: 70px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 4px; font-size: 12px; }
+.prov-chip { display: inline-block; padding: 3px 10px; margin: 2px 6px 2px 0; border-radius: 5px; font-size: 12px; background: var(--panel2); border: 1px solid var(--border); color: var(--text); white-space: nowrap; }
+.prov-chip.on { background: rgba(59,130,246,.15); border-color: rgba(59,130,246,.4); color: var(--blue); }
+.prov-chip.off { color: var(--muted); }
+.g-weight-total { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.g-weight-total b { color: var(--blue); font-variant-numeric: tabular-nums; }
+.pc-weight .pc-lock { font-size: 10px; color: var(--amber); }
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,.6);
@@ -207,7 +213,7 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
   width: 100%; background: var(--bg); border: 1px solid var(--border);
   color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px;
 }
-.form-row textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; min-height: 60px; font-size: 12px; font-family: monospace; }
+ .form-row textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; min-height: 60px; font-size: 12px; font-family: monospace; }
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 .chk { display: inline-flex; align-items: center; gap: 4px; margin: 2px 10px 2px 0; color: var(--text); font-size: 12px; }
 .chk input { width: auto; }
@@ -216,36 +222,9 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
 .provider-pick label input { width: auto; }
 .backup-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: var(--bg); }
 .backup-row .br-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-.backup-row .br-head input { width: 160px; }
+.backup-row .br-head select { flex: 1; min-width: 200px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 7px 10px; font-size: 13px; }
 .backup-row .br-head .br-ratio { width: 110px; }
 .backup-row .br-note { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
-.bk-pick { position: relative; }
-.bk-pick .bk-trigger {
-  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--panel2); color: var(--text); font-size: 12px; cursor: pointer; width: 100%;
-}
-.bk-pick .bk-trigger:hover { border-color: var(--blue); }
-.bk-pick .bk-trigger .bk-empty { color: var(--muted); }
-.bk-pick .bk-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.bk-pick .bk-tag {
-  background: rgba(59,130,246,.14); color: var(--blue); border: 1px solid rgba(59,130,246,.4);
-  border-radius: 6px; padding: 1px 7px; font-size: 11px;
-}
-.bk-pick .bk-caret { color: var(--muted); margin-left: auto; }
-.bk-pick .bk-panel {
-  display: none; position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
-  max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--panel); box-shadow: 0 8px 24px rgba(0,0,0,.35);
-}
-.bk-pick.open .bk-panel { display: block; }
-.bk-pick .bk-opt {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--text);
-}
-.bk-pick .bk-opt:hover { background: rgba(59,130,246,.08); }
-.bk-pick .bk-opt input { width: auto; margin: 0; }
-.bk-pick .bk-opt .bk-name { font-weight: 600; }
-.bk-pick .bk-opt .bk-meta { margin-left: auto; color: var(--muted); font-size: 11px; text-align: right; }
 /* ---- 分组弹窗：区块化布局 ---- */
 .gs-block { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg); }
 .gs-block > .gs-title { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; letter-spacing: .03em; display: flex; align-items: center; justify-content: space-between; }
@@ -260,10 +239,13 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
   background: var(--panel2); cursor: pointer; transition: all .15s; user-select: none;
 }
 .prov-card:hover { border-color: var(--blue); }
-.prov-card input { position: absolute; opacity: 0; width: 0; height: 0; }
+.prov-card input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; }
 .prov-card .pc-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prov-card .pc-count { font-size: 11px; color: var(--muted); }
 .prov-card .pc-region { font-size: 10px; color: var(--muted); }
+.prov-card .pc-weight { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.prov-card .pc-weight input { position: static; opacity: 1; width: 56px; height: auto; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 5px; font-size: 12px; }
+.prov-card .pc-weight input:focus { outline: none; border-color: var(--blue); }
 .prov-card.on { border-color: var(--blue); background: rgba(59,130,246,.14); box-shadow: inset 0 0 0 1px var(--blue); }
 .prov-card.on .pc-name { color: var(--blue); }
 .region-pills { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -668,8 +650,9 @@ tr.dead-row td { opacity: .5; }
       <div id="g-region-countries" style="display:none;"></div>
     </div>
     <div class="gs-block">
-      <div class="gs-title">主池 Provider <span style="font-weight:400;color:var(--muted);letter-spacing:0;">可多选；勾选后可设置该 provider 在此分组的调度权重（缺省 1）</span></div>
+      <div class="gs-title">主池 Provider <span style="font-weight:400;color:var(--muted);letter-spacing:0;">使用率 = 负载占比，勾选项总和自动保持 100%；手动指定某项后，其余自动均分剩余占比（保留整数）</span></div>
       <div class="provider-grid" id="g-primary-pick"></div>
+      <div class="g-weight-total">使用率合计：<b id="g-weight-total">—</b></div>
     </div>
     <div class="gs-block">
       <div class="gs-title">备用池 <span style="font-weight:400;color:var(--muted);letter-spacing:0;">按等级顺序，第一行最先使用，第一行不可用才切到第二行</span></div>
@@ -726,9 +709,6 @@ tr.dead-row td { opacity: .5; }
         <option value="user">user</option>
         <option value="admin">admin</option>
       </select>
-      <label style="width:auto;min-width:0;display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="acct-enabled" checked> 启用
-      </label>
     </div>
     <div class="form-row">
       <label>可用分组（逗号分隔，留空=全部）</label>
@@ -738,23 +718,6 @@ tr.dead-row td { opacity: .5; }
     <div class="form-actions">
       <button class="btn" onclick="closeAccountModal()">取消</button>
       <button class="btn btn-primary" onclick="submitAccount()">保存</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="login-modal">
-  <div class="modal" style="width:380px;">
-    <h3>登录</h3>
-    <div class="form-row">
-      <label>账户名</label>
-      <input id="login-name" autocomplete="username">
-    </div>
-    <div class="form-row">
-      <label>密码</label>
-      <input id="login-pass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-    </div>
-    <div class="form-actions">
-      <button class="btn btn-primary" onclick="doLogin()">登录</button>
     </div>
   </div>
 </div>
@@ -787,10 +750,10 @@ async function api(path, opts = {}) {
   let data = {};
   try { data = JSON.parse(text); } catch (e) {}
   if (res.status === 401) {
-    // token invalid/expired -> prompt login
+    // token invalid/expired -> redirect to the standalone login page
     token = '';
     localStorage.removeItem('pp_token');
-    showLogin();
+    location.href = '/login';
     const err = new Error(data.error || ('HTTP ' + res.status));
     err.unauthorized = true;
     throw err;
@@ -804,48 +767,16 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function showLogin() {
-  document.getElementById('login-modal').classList.add('show');
-  document.getElementById('login-pass').value = '';
-  document.getElementById('login-name').focus();
-}
-
-function hideLogin() {
-  document.getElementById('login-modal').classList.remove('show');
-}
-
-async function doLogin() {
-  const name = document.getElementById('login-name').value.trim();
-  const password = document.getElementById('login-pass').value;
-  if (!name || !password) { toast('请输入账户和密码', true); return; }
-  try {
-    const data = await api('/api/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ name, password }),
-    });
-    token = data.token;
-    localStorage.setItem('pp_token', token);
-    currentMe = { name: data.name, role: data.role, groups: data.groups, admin: data.admin };
-    hideLogin();
-    toast('登录成功：' + data.name);
-    refreshAll();
-  } catch (e) {
-    toast('登录失败: ' + e.message, true);
-  }
-}
-
 // auth probe: use /auth/me which works for any authenticated account (admin or
 // not) and returns the role, so the console can hide admin endpoints for
 // regular users. When auth is disabled the server answers with admin=true.
 async function initAuth() {
   if (token) {
     try {
-      const me = await api('/api/v1/auth/me', { method: 'GET' });
-      currentMe = me;
-      return;
+      currentMe = await api('/api/v1/auth/me', { method: 'GET' });
+      return true;
     } catch (e) {
-      if (!e.unauthorized) return; // auth disabled
-      // token invalid -> fall through to anonymous probe below
+      if (!e.unauthorized) return true; // auth disabled
       token = '';
       localStorage.removeItem('pp_token');
     }
@@ -853,12 +784,14 @@ async function initAuth() {
   try {
     const r = await fetch(API + '/api/v1/auth/me', { method: 'GET' });
     if (r.status === 401 || r.status === 403) {
-      showLogin();
+      return false;
     } else if (r.ok) {
       const me = await r.json();
       currentMe = me;
+      return true;
     }
   } catch (e) { /* network issue: ignore */ }
+  return false;
 }
 
 function toast(msg, isError = false) {
@@ -1206,7 +1139,10 @@ function renderGroups() {
       ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
     const rows = (g.tiers || []).map((t, ti) => {
-      const names = ti === 0 ? (g.primary || []).join(', ') : ((g.backups || [])[ti - 1]?.providers || []).join(', ');
+      const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti - 1]?.providers || []);
+      const provChips = provNames.map(n =>
+        `<span class="prov-chip ${ti === 0 ? 'on' : 'off'}" title="${esc(n)}">${esc(n)}</span>`
+      ).join('');
       return `
       <tr>
         <td class="col-tier">${esc(t.name)}${ti === 0 ? ' <span class="badge on" style="font-size:10px;">主池</span>' : ' <span class="badge kind" style="font-size:10px;">备用</span>'}</td>
@@ -1214,7 +1150,7 @@ function renderGroups() {
         <td class="col-num">${t.alive_total}</td>
         <td class="col-num">${(t.min_alive_ratio * 100).toFixed(0)}%</td>
         <td class="col-status">${t.usable ? '<span class="badge on">可用</span>' : '<span class="badge off">不可用</span>'}</td>
-        <td class="col-providers" style="color:var(--muted);font-size:12px;">${esc(names || '—')}</td>
+        <td class="col-providers" style="font-size:12px;">${provChips || '<span class="prov-chip off">—</span>'}</td>
       </tr>`;
     }).join('') || '<tr><td colspan="6" class="empty">无层级</td></tr>';
     const regionBadges = (g.regions || []).map(r =>
@@ -1245,7 +1181,8 @@ function renderGroups() {
 
 let editingGroup = null;
 let gBackupRows = []; // 每一行是一个 {name, min_alive_ratio, providers:[...]}
-let gPrimaryWeights = {}; // 主池 provider 名 -> 权重（分组层，缺省 1）
+let gPrimaryWeights = {}; // 主池 provider 名 -> 使用率(%)；仅记录已手动指定的（锁定项）
+let gPrimaryLocked = {};  // 主池 provider 名 -> true，表示该 provider 的使用率由用户手动指定、自动分配时不改动
 let gPrimaryPicked = []; // 主池当前勾选的 provider 名
 
 // regionLabels maps a region token to a human label.
@@ -1264,8 +1201,8 @@ function countryName(code) {
 function openGroupModal(name) {
   editingGroup = null;
   gBackupRows = [];
-  openBackupPickId = -1;
   gPrimaryWeights = {};
+  gPrimaryLocked = {};
   document.getElementById('group-modal-title').textContent = '新增分组';
   document.getElementById('g-name').value = '';
   document.getElementById('g-type').value = '';
@@ -1293,6 +1230,26 @@ function openGroupModal(name) {
       if (cb) cb.checked = true;
     });
     gPrimaryWeights = Object.assign({}, g.primary_weights || {});
+    // Old data used relative weights that may not sum to 100; normalise them
+    // to usage percentages so the scheduling ratio is preserved.
+    const wNames = Object.keys(gPrimaryWeights);
+    if (wNames.length) {
+      const wSum = wNames.reduce((s, n) => s + (gPrimaryWeights[n] || 0), 0);
+      if (wSum !== 100) {
+        let acc = 0;
+        wNames.forEach((n, i) => {
+          if (i === wNames.length - 1) {
+            gPrimaryWeights[n] = 100 - acc;
+          } else {
+            gPrimaryWeights[n] = Math.round((gPrimaryWeights[n] || 0) * 100 / wSum);
+            acc += gPrimaryWeights[n];
+          }
+        });
+      }
+    }
+    // Values loaded from the backend were explicitly set, so treat them as
+    // locked; renderPrimaryPick rebalances the remainder among new picks.
+    Object.keys(gPrimaryWeights).forEach(k => { gPrimaryLocked[k] = true; });
     renderPrimaryPick(g.primary || []);
     gBackupRows = (g.backups || []).map(b => ({ name: b.name || '', min_alive_ratio: b.min_alive_ratio ?? 0, providers: b.providers || [] }));
     renderBackupRows();
@@ -1362,9 +1319,13 @@ function regionBadgeClass(p) {
 }
 
 // renderPrimaryPick renders the primary provider card grid. Each selected card
-// gets a weight input (缺省 1) stored in gPrimaryWeights.
+// shows its usage share (%) input. When `selected` is provided the picked set
+// is (re)initialised and shares rebalanced to sum to 100.
 function renderPrimaryPick(selected) {
-  if (selected) gPrimaryPicked = selected.slice();
+  if (selected) {
+    gPrimaryPicked = selected.slice();
+    rebalancePrimaryWeights();
+  }
   const sel = new Set(gPrimaryPicked);
   const el = document.getElementById('g-primary-pick');
   if (!state.providers.length) {
@@ -1381,9 +1342,11 @@ function renderPrimaryPick(selected) {
     const isOn = sel.has(p.name);
     const wInput = isOn
       ? `<span class="pc-weight">
-          <label style="font-size:10px;color:var(--muted);">权重</label>
-          <input type="number" min="1" value="${gPrimaryWeights[p.name] || 1}"
-            data-weight="${esc(p.name)}" onchange="setPrimaryWeight(this)">
+          <span style="font-size:10px;color:var(--muted);">使用率</span>
+          ${gPrimaryLocked[p.name] ? '<span class="pc-lock">锁定</span>' : ''}
+          <input type="number" min="1" max="100" step="1" value="${gPrimaryWeights[p.name] || 0}"
+            data-weight="${esc(p.name)}" oninput="onPrimaryWeightInput(this)" onchange="setPrimaryWeight(this)">
+          <span style="font-size:10px;color:var(--muted);">%</span>
         </span>`
       : '';
     return `<label class="prov-card ${isOn ? 'on' : ''}" title="${esc(p.name)}">
@@ -1394,6 +1357,16 @@ function renderPrimaryPick(selected) {
       ${wInput}
     </label>`;
   }).join('');
+  updateWeightTotal();
+}
+
+// onPrimaryWeightInput clamps the typed value to 1..100 live; actual locking
+// happens on change.
+function onPrimaryWeightInput(input) {
+  let v = parseInt(input.value);
+  if (isNaN(v)) return;
+  if (v > 100) input.value = 100;
+  if (v < 1) input.value = 1;
 }
 
 // togglePrimaryPick updates the picked set and re-renders so weight inputs
@@ -1403,30 +1376,77 @@ function togglePrimaryPick(checked, name) {
     if (!gPrimaryPicked.includes(name)) gPrimaryPicked.push(name);
   } else {
     gPrimaryPicked = gPrimaryPicked.filter(n => n !== name);
+    delete gPrimaryWeights[name];
+    delete gPrimaryLocked[name];
   }
+  rebalancePrimaryWeights();
   renderPrimaryPick();
 }
 
-// setPrimaryWeight records a primary-pool provider weight on change.
-function setPrimaryWeight(input) {
-  const name = input.dataset.weight;
-  const w = parseInt(input.value);
-  gPrimaryWeights[name] = (w && w >= 1) ? w : 1;
-  if (!(w && w >= 1)) input.value = 1;
+// rebalancePrimaryWeights re-distributes usage shares so the picked providers
+// sum to exactly 100. Manually specified (locked) values stay fixed; the rest
+// evenly share the remainder, rounded down with the leftover folded into the
+// first unlocked entries so no decimals appear.
+function rebalancePrimaryWeights() {
+  const picked = gPrimaryPicked.slice();
+  const n = picked.length;
+  if (!n) { updateWeightTotal(); return; }
+  if (n === 1) {
+    // Single picked provider: default to 100% unless the user already locked a
+    // manual value (e.g. 60%) that will be topped up by the next addition.
+    if (!gPrimaryLocked[picked[0]] || !gPrimaryWeights[picked[0]]) {
+      gPrimaryWeights[picked[0]] = 100;
+    }
+    updateWeightTotal();
+    return;
+  }
+  const locked = picked.filter(x => gPrimaryLocked[x]);
+  let lockedSum = 0;
+  locked.forEach(x => { lockedSum += gPrimaryWeights[x] || 0; });
+  const free = picked.filter(x => !gPrimaryLocked[x]);
+  let remaining = 100 - lockedSum;
+  if (free.length) {
+    if (remaining < free.length) remaining = free.length; // give each free at least 1%
+    const base = Math.floor(remaining / free.length);
+    let rem = remaining - base * free.length;
+    free.forEach((x, i) => {
+      gPrimaryWeights[x] = base + (i < rem ? 1 : 0);
+    });
+  }
+  // All locked and not summing to 100: fold the difference into the last item.
+  if (!free.length && lockedSum !== 100) {
+    const last = picked[picked.length - 1];
+    gPrimaryWeights[last] = (gPrimaryWeights[last] || 0) + (100 - lockedSum);
+  }
+  updateWeightTotal();
 }
 
-// openBackupPickId tracks which backup row's dropdown is currently expanded.
-let openBackupPickId = -1;
+// updateWeightTotal refreshes the running sum indicator.
+function updateWeightTotal() {
+  const el = document.getElementById('g-weight-total');
+  if (!el) return;
+  let sum = 0;
+  gPrimaryPicked.forEach(n => { sum += gPrimaryWeights[n] || 0; });
+  const bad = gPrimaryPicked.length > 0 && sum !== 100;
+  el.innerHTML = `<b style="color:${bad ? 'var(--red)' : 'var(--blue)'}">${sum}%</b><span style="color:var(--muted);"> / 100%</span>${bad ? ' <span style="color:var(--red);">（需调整为 100%）</span>' : ''}`;
+}
 
-// toggleBackupPick opens/closes the provider dropdown of backup row i.
-function toggleBackupPick(i) {
-  openBackupPickId = openBackupPickId === i ? -1 : i;
-  renderBackupRows();
+// setPrimaryWeight locks a provider's manually entered usage share and
+// re-distributes the remainder among the others.
+function setPrimaryWeight(input) {
+  const name = input.dataset.weight;
+  let w = parseInt(input.value);
+  if (!(w >= 1)) w = 1;
+  if (w > 99) w = 99; // keep at least 1% for others
+  gPrimaryWeights[name] = w;
+  gPrimaryLocked[name] = true;
+  rebalancePrimaryWeights();
+  renderPrimaryPick();
 }
 
 // renderBackupRows renders the ordered backup pool rows. Each row uses a
-// dropdown selector: click to expand, shows each available provider with its
-// alive count and region badge, click an option to toggle it.
+// dropdown selector listing every available provider; picking one adds it as
+// the backup pool's provider immediately.
 function renderBackupRows() {
   const el = document.getElementById('g-backup-rows');
   if (!gBackupRows.length) {
@@ -1434,36 +1454,31 @@ function renderBackupRows() {
     return;
   }
   el.innerHTML = gBackupRows.map((row, i) => {
-    const picked = new Set(row.providers || []);
     const opts = state.providers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p => {
       const region = providerRegionLabel(p.countries);
-      const regionTag = region === '未知' ? '' : `<span class="badge ${regionBadgeClass(p)}" style="font-size:10px;margin-right:4px;">${esc(region)}</span>`;
-      return `<label class="bk-opt" title="${esc(p.name)}">
-        <input type="checkbox" value="${esc(p.name)}" data-bk="${i}" data-prov="${esc(p.name)}" ${picked.has(p.name) ? 'checked' : ''}>
-        <span class="bk-name">${esc(p.name)}</span>
-        ${regionTag}
-        <span class="bk-meta">存活 ${p.alive}/${p.total}</span>
-      </label>`;
-    }).join('') || '<div style="color:var(--muted);font-size:11px;padding:8px 12px;">无可用 provider</div>';
-    const tags = picked.size
-      ? `<span class="bk-tags">${[...picked].map(n => `<span class="bk-tag">${esc(n)}</span>`).join('')}</span>`
-      : `<span class="bk-empty">未选择 provider（点击选择）</span>`;
+      return `<option value="${esc(p.name)}">${esc(p.name)} · ${esc(region)} · 存活 ${p.alive}/${p.total}</option>`;
+    }).join('');
+    const current = (row.providers && row.providers[0]) || '';
     return `
     <div class="backup-row">
       <div class="br-head">
         <span class="badge kind">第${i + 1}备用</span>
-        <input id="bk-name-${i}" placeholder="备用池名称" value="${esc(row.name)}" data-bkname="${i}" oninput="gBackupRows[${i}].name=this.value">
+        <select data-bk="${i}" onchange="setBackupProvider(${i}, this.value)">
+          <option value="">-- 选择 Provider --</option>
+          ${opts}
+        </select>
         <input class="br-ratio" type="number" step="0.01" min="0" max="1" value="${row.min_alive_ratio}" title="存活率阈值 min_alive_ratio" data-bkratio="${i}" oninput="gBackupRows[${i}].min_alive_ratio=parseFloat(this.value)||0">
         <button class="btn btn-sm btn-danger" onclick="removeBackupRow(${i})">删除</button>
       </div>
-      <div class="bk-pick ${openBackupPickId === i ? 'open' : ''}">
-        <button type="button" class="bk-trigger" onclick="toggleBackupPick(${i})">
-          ${tags}<span class="bk-caret">▾</span>
-        </button>
-        <div class="bk-panel">${opts}</div>
-      </div>
     </div>`;
   }).join('');
+}
+
+// setBackupProvider records the selected provider for backup row i. The name
+// is auto-generated (backup-N) so the user only picks a provider.
+function setBackupProvider(i, name) {
+  gBackupRows[i].providers = name ? [name] : [];
+  gBackupRows[i].name = gBackupRows[i].name.trim() || ('backup-' + (i + 1));
 }
 
 // addBackupRow appends a new empty backup tier row.
@@ -1489,18 +1504,22 @@ async function submitGroup() {
   document.querySelectorAll('#g-primary-pick input[type=checkbox]:checked').forEach(cb => primary.push(cb.value));
   if (!primary.length) { toast('主池 provider 至少勾选一个', true); return; }
 
-  // collect primary weights (only for actually-selected providers)
+  // collect primary usage shares (percentages summing to 100) for the selected
+  // providers; auto-assigned values were written by rebalancePrimaryWeights.
   const primary_weights = {};
+  let wSum = 0;
   primary.forEach(n => {
-    const w = gPrimaryWeights[n] || 1;
-    if (w >= 1) primary_weights[n] = w;
+    const w = gPrimaryWeights[n] || 0;
+    primary_weights[n] = w;
+    wSum += w;
   });
+  if (wSum !== 100) {
+    toast('主池使用率合计须为 100%，当前 ' + wSum + '%', true);
+    return;
+  }
 
-  // read backup row checkbox selections (re-render to sync latest DOM state)
-  gBackupRows.forEach((row, i) => {
-    row.providers = [];
-    document.querySelectorAll(`#g-backup-rows input[data-bk="${i}"]:checked`).forEach(cb => row.providers.push(cb.value));
-  });
+  // backup rows keep their state in gBackupRows (select onchange writes
+  // directly), so the selected providers are always in sync with the UI.
   const backups = gBackupRows.map((row, i) => ({
     name: row.name.trim() || ('backup-' + (i + 1)),
     min_alive_ratio: row.min_alive_ratio || 0,
@@ -1588,7 +1607,12 @@ function renderAccounts() {
       <td><span class="badge ${a.role === 'admin' ? 'on' : 'kind'}">${esc(a.role)}</span></td>
       <td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;">${esc(a.token)}</td>
       <td>${esc((a.groups && a.groups.length) ? a.groups.join(', ') : '全部')}</td>
-      <td>${a.enabled ? '<span class="badge on">启用</span>' : '<span class="badge off">停用</span>'}</td>
+      <td>
+        <label class="toggle" title="启用/停用该账户">
+          <input type="checkbox" data-acct-toggle="${esc(a.name)}" ${a.enabled ? 'checked' : ''} onchange="toggleAccount('${esc(a.name)}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </td>
       <td class="nowrap">
         <button class="btn btn-sm" data-name="${esc(a.name)}" onclick="openAccountModal(this.dataset.name)">编辑</button>
         <button class="btn btn-sm btn-danger" data-name="${esc(a.name)}" onclick="removeAccount(this.dataset.name)">删除</button>
@@ -1603,7 +1627,6 @@ function openAccountModal(name) {
   document.getElementById('acct-modal-title').textContent = '新增账户';
   ['acct-name','acct-pass','acct-groups'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('acct-role').value = 'user';
-  document.getElementById('acct-enabled').checked = true;
   const a = state.accounts.find(x => x.name === name);
   if (a) {
     editingAccount = a.name;
@@ -1612,7 +1635,6 @@ function openAccountModal(name) {
     document.getElementById('acct-pass').value = '';
     document.getElementById('acct-role').value = a.role;
     document.getElementById('acct-groups').value = (a.groups || []).join(', ');
-    document.getElementById('acct-enabled').checked = !!a.enabled;
   }
   document.getElementById('acct-modal').classList.add('show');
 }
@@ -1625,10 +1647,12 @@ async function submitAccount() {
   const name = document.getElementById('acct-name').value.trim();
   const password = document.getElementById('acct-pass').value;
   const role = document.getElementById('acct-role').value;
-  const enabled = document.getElementById('acct-enabled').checked;
   const groups = document.getElementById('acct-groups').value.split(',').map(s => s.trim()).filter(Boolean);
   if (!name) { toast('账户名必填', true); return; }
-  const body = { name, password, role, enabled, groups };
+  // New accounts are enabled by default; editing keeps the current enabled
+  // state so enabling/disabling is controlled only from the list toggle.
+  const existing = editingAccount ? state.accounts.find(x => x.name === editingAccount) : null;
+  const body = { name, password, role, groups, enabled: existing ? !!existing.enabled : true };
   try {
     if (editingAccount) {
       await api('/api/v1/admin/accounts/' + encodeURIComponent(editingAccount), { method: 'PUT', body: JSON.stringify(body) });
@@ -1642,23 +1666,6 @@ async function submitAccount() {
   } catch (e) { toast('保存失败: ' + e.message, true); }
 }
 
-async function addAccount() {
-  const name = document.getElementById('acct-name').value.trim();
-  const password = document.getElementById('acct-pass').value;
-  const role = document.getElementById('acct-role').value;
-  const groups = document.getElementById('acct-groups').value.split(',').map(s => s.trim()).filter(Boolean);
-  if (!name) { toast('账户名必填', true); return; }
-  try {
-    await api('/api/v1/admin/accounts', {
-      method: 'POST',
-      body: JSON.stringify({ name, password, role, enabled: true, groups }),
-    });
-    toast('账户已添加（Token 已自动生成）');
-    ['acct-name','acct-pass','acct-groups'].forEach(id => document.getElementById(id).value = '');
-    await loadAccounts();
-  } catch (e) { toast('添加失败: ' + e.message, true); }
-}
-
 async function removeAccount(name) {
   if (!confirm(`确认删除账户「${name}」？`)) return;
   try {
@@ -1666,6 +1673,20 @@ async function removeAccount(name) {
     toast('账户已删除');
     await loadAccounts();
   } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function toggleAccount(name, enabled) {
+  try {
+    await api('/api/v1/admin/accounts/' + encodeURIComponent(name), {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    });
+    toast(`账户「${name}」已${enabled ? '启用' : '停用'}`);
+    await loadAccounts();
+  } catch (e) {
+    toast('操作失败: ' + e.message, true);
+    await loadAccounts();
+  }
 }
 
 async function loadUsage() {
@@ -2552,13 +2573,17 @@ document.getElementById('webhook-modal').addEventListener('click', e => {
 document.getElementById('acct-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('acct-modal')) closeAccountModal();
 });
-document.getElementById('login-modal').addEventListener('click', e => {
-  if (e.target === document.getElementById('login-modal')) hideLogin();
-});
 
-initAuth();
-refreshAll();
-setInterval(refreshAll, 3000);
+(async () => {
+  const authed = await initAuth();
+  if (!authed) {
+    // no valid session: go to the standalone login page, never start polling
+    location.href = '/login';
+    return;
+  }
+  refreshAll();
+  setInterval(refreshAll, 3000);
+})();
 </script>
 </body>
 </html>

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"proxy-pool/internal/config"
+	"proxy-pool/internal/persist"
 )
 
 // NewToken generates a random API token for accounts that do not provide one.
@@ -51,6 +52,34 @@ type Manager struct {
 	mu      sync.RWMutex
 	byName  map[string]*Account
 	byToken map[string]*Account
+	persist *persist.MySQL
+}
+
+// AttachMySQL wires optional MySQL persistence so account mutations survive
+// restarts. Pass nil to keep accounts in-memory only.
+func (m *Manager) AttachMySQL(p *persist.MySQL) {
+	m.mu.Lock()
+	m.persist = p
+	m.mu.Unlock()
+}
+
+// SyncAll seeds MySQL with the current account set. Called once at startup so
+// config.yaml accounts appear in the database even when the table was empty.
+func (m *Manager) SyncAll() error {
+	m.mu.RLock()
+	accts := make([]config.AccountCfg, 0, len(m.byName))
+	for _, a := range m.byName {
+		accts = append(accts, config.AccountCfg{
+			Name: a.Name, Password: a.Password, Token: a.Token,
+			Role: a.Role, Enabled: a.Enabled, Groups: a.Groups,
+		})
+	}
+	pers := m.persist
+	m.mu.RUnlock()
+	if pers == nil {
+		return nil
+	}
+	return pers.ReplaceAccounts(accts)
 }
 
 // New builds an account manager from the given account configs.
@@ -150,6 +179,14 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 	}
 	m.byToken[c.Token] = acct
 	m.byName[c.Name] = acct
+	if m.persist != nil {
+		if err := m.persist.SaveAccount(config.AccountCfg{
+			Name: acct.Name, Password: acct.Password, Token: acct.Token,
+			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -184,6 +221,12 @@ func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 		acct.Token = c.Token
 		m.byToken[c.Token] = acct
 	}
+	if m.persist != nil {
+		return m.persist.SaveAccount(config.AccountCfg{
+			Name: acct.Name, Password: acct.Password, Token: acct.Token,
+			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
+		})
+	}
 	return nil
 }
 
@@ -199,6 +242,9 @@ func (m *Manager) RemoveAccount(name string) error {
 		delete(m.byToken, acct.Token)
 	}
 	delete(m.byName, name)
+	if m.persist != nil {
+		return m.persist.DeleteAccount(name)
+	}
 	return nil
 }
 

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - Proxy Pool</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --panel2: #334155;
+  --border: #475569;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --blue: #3b82f6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-card {
+  width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 34px 32px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.35);
+}
+.login-card .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.login-card .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); display: inline-block; }
+.login-card h1 { font-size: 18px; font-weight: 600; }
+.login-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 26px; }
+.form-row { margin-bottom: 16px; }
+.form-row label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.form-row input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color .15s;
+}
+.form-row input:focus { border-color: var(--blue); }
+.form-row input::placeholder { color: var(--muted); opacity: .7; }
+.form-actions { margin-top: 22px; }
+.btn {
+  width: 100%;
+  background: var(--blue);
+  border: 1px solid var(--blue);
+  color: #fff;
+  padding: 11px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background .15s;
+}
+.btn:hover { background: #2563eb; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.error {
+  background: rgba(239,68,68,.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 6px;
+  padding: 9px 12px;
+  font-size: 13px;
+  margin-top: 16px;
+  display: none;
+}
+.error.show { display: block; }
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 18px;
+}
+.hint code { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo"><span class="dot"></span><h1>Proxy Pool</h1></div>
+  <div class="sub">管理控制台 · 登录后进入</div>
+  <div class="form-row">
+    <label for="login-name">账户名</label>
+    <input id="login-name" autocomplete="username" placeholder="请输入账户名">
+  </div>
+  <div class="form-row">
+    <label for="login-pass">密码</label>
+    <input id="login-pass" type="password" autocomplete="current-password" placeholder="请输入密码">
+  </div>
+  <div class="form-actions">
+    <button id="login-btn" class="btn">登 录</button>
+  </div>
+  <div id="login-error" class="error"></div>
+  <div class="hint">默认管理员：<code>admin</code> / <code>admin123</code></div>
+</div>
+
+<script>
+const API = '';
+
+async function checkSession() {
+  // If auth is disabled or token already valid, go straight to the console.
+  try {
+    const r = await fetch(API + '/api/v1/auth/me', { method: 'GET' });
+    if (r.ok) {
+      location.href = '/';
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function showError(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+async function doLogin() {
+  const name = document.getElementById('login-name').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  errEl.classList.remove('show');
+
+  if (!name || !password) { showError('请输入账户名和密码'); return; }
+
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showError(data.error || ('登录失败 (HTTP ' + res.status + ')'));
+      return;
+    }
+    if (!data.token) {
+      showError('服务端未返回 token，请检查账户配置');
+      return;
+    }
+    localStorage.setItem('pp_token', data.token);
+    location.href = '/';
+  } catch (e) {
+    showError('网络错误，请重试');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('login-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('login-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('login-pass').focus();
+});
+
+checkSession().then(authed => {
+  if (!authed) document.getElementById('login-name').focus();
+});
+</script>
+</body>
+</html>

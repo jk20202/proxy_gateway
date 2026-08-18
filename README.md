@@ -17,6 +17,9 @@
 - **调用统计**：消费 API 每次取代理由系统异步记录到 SQLite（不阻塞请求路径），Web 端按账户查看调用次数与成功率
 - **Webhook + 邮件告警**：provider 失效/恢复、池耗尽、刷新失败时通过 Webhook（钉钉/飞书/Slack 等）与 SMTP 邮件及时通知，内置去重避免告警风暴
 - **结果反馈闭环**：爬虫侧上报成功/失败，实时调整单个代理状态
+- **MySQL + Redis 持久化存储**：MySQL 存低频设置（账户/分组/Provider 配置），Redis 缓存高频代理状态（延迟/国家/存活），配置改动能跨重启保留，全部由 `config.yaml` 驱动
+- **HTTP 代理网关**：按分组凭证鉴权，`curl -x 用户名:密码@主机:10000` 直连组内代理；纯隧道型分组支持 `/direct` 直连端点，把上游地址下发给客户端、数据流量绕过本机（省本机带宽）
+- **一键部署**：`deploy/docker-compose.yml` 一条命令拉起 MySQL + Redis + 应用；也提供 Supervisor 进程守护方式（详见「部署」）
 
 ## 架构
 
@@ -43,23 +46,175 @@
                     └───────────┘ └───────────────┘
 ```
 
-## 在线预览（临时部署地址）
+## 部署
 
-当前部署实例（实时可访问）：
+支持三种方式，按需选择：
 
-- **Web 控制台**：https://8080-6bfeb97dcb0b6b86.monkeycode-ai.online
-- **取代理 API 示例**：
-  - 免费代理：`GET https://8080-6bfeb97dcb0b6b86.monkeycode-ai.online/api/v1/proxy?group=charlespikachu-free`
-  - 需带 `Authorization: Bearer <token>`（默认账户见 `config.yaml` 的 `accounts`）
-- 控制台内「API 文档」页签内含全部接口的调用说明与 curl 示例。
+| 方式 | 适合场景 | MySQL/Redis |
+|------|---------|-------------|
+| **Docker Compose 一键部署**（推荐） | 新服务器快速上线 | 由 Compose 自动拉起（MySQL + Redis），开箱即用 |
+| **Supervisor 进程守护** | 已有 MySQL/Redis，仅需托管应用进程 | 复用你现有的本机/线上数据库 |
+| **裸进程运行** | 本地开发调试 | 默认本机 127.0.0.1，可在 `config.yaml` 配置 |
 
-> 注：此为开发环境的临时公网预览地址，重启/重建后可能变化，以实际部署为准。
+详见下文「[Docker Compose 一键部署](#docker-compose-一键部署)」与「[Supervisor 部署](#supervisor-部署)」。
+
+### Docker Compose 一键部署
+
+`deploy/` 目录提供完整的 Docker 一键部署：`docker compose` 会同时拉起 **MySQL + Redis + 应用** 三个容器，无需手动装数据库。
+
+**前置要求**：服务器已安装 Docker 与 Docker Compose 插件（`docker compose version` 可用）。
+
+**1. 克隆仓库**
+
+```bash
+git clone https://github.com/jk20202/proxy_gateway.git
+cd proxy_gateway
+```
+
+**2. 修改配置（可选）**
+
+编辑 `deploy/config.docker.yaml`，重点确认：
+
+- `accounts`：默认 `admin/admin123`，上线前务必改掉
+- `storage.mysql.pass` 与 `deploy/docker-compose.yml` 中 `MYSQL_PASSWORD` 保持一致（默认都为 `proxy_pass`）
+- `storage.redis.addr` 与 `storage.mysql.addr` 指向 compose 内网服务名 `redis:6379` / `mysql:3306`（已默认配好）
+
+**3. 一键启动**
+
+```bash
+cd deploy
+docker compose up -d --build
+```
+
+等待镜像构建与数据库初始化（首次约 1-3 分钟）：
+
+```bash
+docker compose logs -f proxy-pool   # 观察应用启动日志
+```
+
+看到 `mysql storage enabled` 与 `redis storage enabled` 即完成。
+
+**4. 访问**
+
+| 入口 | 地址 |
+|------|------|
+| Web 管理控制台 | `http://服务器IP:8080` |
+| 代理网关（HTTP 代理） | `http://用户名:密码@服务器IP:10000` |
+
+**常用命令**
+
+```bash
+docker compose ps                        # 查看三容器状态
+docker compose logs -f proxy-pool        # 跟踪应用日志
+docker compose restart proxy-pool        # 修改配置后重启应用
+docker compose down                      # 停止（数据保留在卷中）
+docker compose down -v                   # 停止并清空所有数据（慎用）
+```
+
+**转线上数据库（不用本仓库的 MySQL/Redis）**
+
+把 `deploy/config.docker.yaml` 中 `storage` 段改为线上地址，并在 `docker-compose.yml` 中注释掉 `mysql`、`redis` 两个服务即可：
+
+```yaml
+storage:
+  mysql:
+    addr: "你的线上MySQL:3306"     # 如 db.example.com:3306
+    user: "proxy"
+    pass: "你的密码"
+    db: "proxy_pool"
+  redis:
+    addr: "你的线上Redis:6379"     # 如 redis.example.com:6379
+    # password: "你的Redis密码"（如无认证则留空）
+    # db: 0
+```
+
+> 数据库地址、账号、密码全部由 `config.yaml`（或 `config.docker.yaml`）驱动，无需改代码。
+
+### Supervisor 部署
+
+适用于已有 MySQL/Redis 的服务器：只需用 Supervisor 守护应用进程，数据库由你自行准备（本机或线上均可）。
+
+**1. 安装 Supervisor**
+
+```bash
+# Debian / Ubuntu
+apt-get update && apt-get install -y supervisor
+
+# CentOS / RHEL
+yum install -y supervisor
+```
+
+**2. 准备应用**
+
+```bash
+mkdir -p /opt/proxy-pool /var/log/proxy-pool
+cd /opt/proxy-pool
+git clone https://github.com/jk20202/proxy_gateway.git .
+go build -o proxy-pool ./cmd/proxy-pool
+```
+
+> 也可在本地交叉编译后上传二进制：`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o proxy-pool ./cmd/proxy-pool`
+
+**3. 配置数据库连接**
+
+编辑 `/opt/proxy-pool/config.yaml` 的 `storage` 段，指向你的 MySQL / Redis：
+
+```yaml
+storage:
+  mysql:
+    addr: "127.0.0.1:3306"        # 本机 MySQL；线上则填域名或公网 IP
+    user: "proxy"
+    pass: "你的密码"
+    db: "proxy_pool"
+  redis:
+    addr: "127.0.0.1:6379"
+    # password: "你的Redis密码"
+    # db: 0
+```
+
+> 本方式不安装 MySQL/Redis：请先在服务器上准备一个 MySQL 库（`CREATE DATABASE proxy_pool`，schema 由应用启动时自动创建）和一个 Redis 实例。
+
+**4. 安装 Supervisor 配置**
+
+`deploy/supervisor/proxy-pool.conf` 为示例配置，安装到 Supervisor：
+
+```bash
+mkdir -p /etc/supervisor/conf.d
+cp deploy/supervisor/proxy-pool.conf /etc/supervisor/conf.d/proxy-pool.conf
+
+# 重新加载并启动
+supervisorctl reread
+supervisorctl update
+supervisorctl status proxy-pool
+```
+
+**5. 常用管理**
+
+```bash
+supervisorctl status proxy-pool     # 查看状态
+supervisorctl restart proxy-pool    # 重启
+supervisorctl stop proxy-pool       # 停止
+supervisorctl tail -f proxy-pool    # 跟踪日志
+```
+
+### MySQL/Redis 存储配置说明
+
+应用默认开启 MySQL + Redis 持久化存储（在 `config.yaml` 的 `storage` 段配置）：
+
+| 组件 | 存储内容 | 失效影响 |
+|------|---------|---------|
+| **MySQL** | 账户、调度分组、Provider 配置（低频设置） | 运行时编辑的配置无法持久化，重启回落到 `config.yaml` |
+| **Redis** | 代理延迟、国家、存活状态（高频状态） | 代理池重启后需重新健康检查回填，其余功能正常 |
+
+两者均可选：把整个 `storage` 段留空即可退回纯内存模式（与早期版本一致）。MySQL 为权威存储：启动时若数据库已有数据则优先加载，否则用 `config.yaml` 首次播种。账户新增/分组增删/provider 编辑都会实时写库，跨重启保留。
+
 
 ## 快速开始
 
 ### 前置要求
 
-- Go 1.21+
+- Go 1.25+（见 `go.mod`）
+- MySQL 8+ 与 Redis 6+（可选；仅开启持久化存储时使用，默认本机 `127.0.0.1`）
 
 ### 构建
 
@@ -105,10 +260,10 @@ alerts:
 providers:
   # 隧道型代理：固定网关 + 认证，平台侧自动轮换出口 IP
   # priority=10：高优先级（主）；min_alive_ratio=0.1：存活率跌破 10%（90% 失效）才降级用兜底
+  # 调度权重已迁移到分组主池的 primary_weights（使用率百分比），此处不再配置
   - name: "aliyun-tunnel"
     type: "tunnel"
     enabled: true
-    weight: 100
     priority: 10
     min_alive_ratio: 0.1
     tunnel:
@@ -122,7 +277,6 @@ providers:
   - name: "proxy-cn-ip"
     type: "ip_pool"
     enabled: true
-    weight: 50
     priority: 0
     min_alive_ratio: 0
     ip_pool:
@@ -136,7 +290,6 @@ providers:
   - name: "static-us"
     type: "sticky"
     enabled: true
-    weight: 30
     priority: 0
     sticky_seconds: 300           # 粘性时长（秒）：60=1分钟、300=5分钟，可任意设置
     ip_pool:
@@ -151,7 +304,6 @@ providers:
   - name: "charlespikachu-free"
     type: "free"
     enabled: true
-    weight: 10
     priority: 0
     min_alive_ratio: 0
     check_url: "http://www.gstatic.com/generate_204"   # 免费代理的真实连通性检测目标（204 轻量探测）
@@ -188,6 +340,24 @@ groups:
 - 主池恢复后自动切回主池。
 - **调度算法**：某一层内的 provider 全部为非隧道型（`ip_pool` / `sticky` / `free`）时使用**平滑加权轮询（SWRR）**按权重均匀分配；只要该层含隧道型 provider 则退化为加权随机。
 - 同一 provider 可被多个分组引用；未配置 groups 时退化为下面的优先级模式。
+
+**主池权重 = 使用率百分比**（`primary_weights`）
+
+`primary_weights` 表示主池各 provider 的负载占比（使用率），勾选项总和恒为 100%：
+
+```
+groups:
+  - name: "residential"
+    primary: ["static-a", "pool-b", "tunnel-c"]
+    primary_weights:
+      static-a: 60        # 60% 流量
+      pool-b: 20          # 20%
+      tunnel-c: 20        # 20%
+```
+
+- Web 控制台编辑分组时自动维护：手动指定某项后锁定，其余自动均分剩余占比（保留整数），总和保持 100%。
+- 未指定 `primary_weights` 时组内 provider 等权均分。
+- 为全部主池 provider 指定权重时，后端校验总和必须为 100。
 
 ### 免费代理分组（free）
 
@@ -230,6 +400,23 @@ groups:
 ```bash
 ./proxy-pool -config config.yaml
 ```
+
+### 网关直连（省流量）
+
+HTTP 代理网关（`curl -x 用户名:密码@域名:10000 <URL>`）默认由本机中转所有数据流量，会消耗本机带宽。对**纯隧道型分组**（组内所有 provider 均为 `type: tunnel` 且指向同一上游网关），本机无需中转，可直接把上游隧道地址下发给客户端，让数据流量直达隧道服务商、完全绕过本机：
+
+```bash
+# 先向网关请求直连地址（复用分组凭证鉴权）
+curl -s -x 用户名:密码@域名:10000 http://域名:10000/direct
+# 返回示例：{"direct":"http://upuser:uppass@tunnel.example.com:3128"}
+# 混合型/非隧道型分组返回 {"direct":null,"reason":"..."}
+
+# 然后改用上游地址直连，流量不再经过本机
+curl -x "http://upuser:uppass@tunnel.example.com:3128" <目标URL>
+```
+
+- 混合分组（含 IP 池/免费/静态代理）无法直连，`/direct` 会返回 `direct:null` 并说明原因，仍需中转。
+- 直连模式不改变现有网关行为：普通 `curl -x 域名:10000` 仍走本机中转。
 
 ## API 文档
 
@@ -521,6 +708,11 @@ go test ./...
 ```
 .
 ├── cmd/proxy-pool/        # 服务入口
+├── deploy/
+│   ├── docker-compose.yml # Docker 一键部署（MySQL + Redis + 应用）
+│   ├── config.docker.yaml # Docker 部署用配置（数据库地址指向 compose 内网服务名）
+│   └── supervisor/        # Supervisor 进程守护示例配置
+├── Dockerfile             # 多阶段构建镜像
 ├── examples/
 │   ├── config.yaml        # 配置示例
 │   └── mock-env/          # 模拟代理供应商环境（联调用）
@@ -528,10 +720,12 @@ go test ./...
 │   ├── alert/             # 告警分发（Webhook + 邮件 + provider 状态监控 + 故障自愈）
 │   ├── auth/              # 账户鉴权（登录、token、角色、分组权限）
 │   ├── config/            # 配置加载与校验
+│   ├── gateway/           # HTTP 代理网关（按分组中转/隧道直连）
 │   ├── health/            # 健康检查器
 │   ├── model/             # 核心数据模型（Proxy）
+│   ├── persist/           # MySQL/Redis 持久化存储（账户/分组/provider + 代理状态）
 │   ├── pool/              # 代理池（快照、优先级/分组分层调度、SWRR、粘性会话）
-│   ├── provider/          # 供应商抽象（隧道型/IP池型/长效静态型）
+│   ├── provider/          # 供应商抽象（隧道型/IP池型/长效静态型/免费源）
 │   ├── server/            # HTTP API + 内嵌 Web 管理控制台
 │   └── store/             # SQLite 异步调用记录（每账户统计）
 └── config.yaml            # 运行配置（联调模式）

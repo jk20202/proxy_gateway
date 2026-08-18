@@ -10,6 +10,7 @@ import (
 	"proxy-pool/internal/config"
 	"proxy-pool/internal/geo"
 	"proxy-pool/internal/model"
+	"proxy-pool/internal/persist"
 	"proxy-pool/internal/provider"
 )
 
@@ -23,11 +24,13 @@ type managedProvider struct {
 }
 
 type Manager struct {
-	mu     sync.RWMutex
-	pool   *Pool
-	provs  map[string]*managedProvider
-	cfg    *config.Config
-	logger *slog.Logger
+	mu      sync.RWMutex
+	pool    *Pool
+	provs   map[string]*managedProvider
+	cfg     *config.Config
+	logger  *slog.Logger
+	persist *persist.MySQL
+	redis   *persist.Redis
 
 	geo *geo.Client // nil 时不做 IP 归属查询（geo 未启用）
 
@@ -74,6 +77,78 @@ func (m *Manager) Pool() *Pool {
 // SetGeo wires the IP geolocation client used to enrich proxy countries.
 func (m *Manager) SetGeo(g *geo.Client) {
 	m.geo = g
+}
+
+// AttachMySQL wires optional MySQL persistence for provider configs so runtime
+// edits survive restarts.
+func (m *Manager) AttachMySQL(p *persist.MySQL) {
+	m.mu.Lock()
+	m.persist = p
+	m.mu.Unlock()
+}
+
+// SyncProvidersToDB seeds MySQL with the current provider configs. Called once
+// at startup so config.yaml providers appear even when the table was empty.
+func (m *Manager) SyncProvidersToDB() error {
+	m.mu.RLock()
+	ps := make([]config.ProviderCfg, 0, len(m.provs))
+	for _, mp := range m.provs {
+		ps = append(ps, mp.cfg)
+	}
+	pers := m.persist
+	m.mu.RUnlock()
+	if pers == nil {
+		return nil
+	}
+	return pers.ReplaceProviders(ps)
+}
+
+// AttachRedis wires optional Redis caching of proxy runtime state.
+func (m *Manager) AttachRedis(r *persist.Redis) {
+	m.mu.Lock()
+	m.redis = r
+	m.mu.Unlock()
+}
+
+// RestoreFromRedis replays cached latency / country values onto the proxies in
+// the pool. Called once after the initial load so restart preserves the last
+// observed health data; the health checker re-verifies alive soon after.
+func (m *Manager) RestoreFromRedis() {
+	m.mu.RLock()
+	r := m.redis
+	m.mu.RUnlock()
+	if r == nil {
+		return
+	}
+	byProvider := map[string][]*model.Proxy{}
+	for _, pr := range m.pool.All() {
+		byProvider[pr.Provider] = append(byProvider[pr.Provider], pr)
+	}
+	for prov, proxies := range byProvider {
+		states, err := r.LoadProxyStates(prov)
+		if err != nil {
+			m.logger.Debug("redis restore failed", "provider", prov, "err", err)
+			continue
+		}
+		restored := 0
+		for _, pr := range proxies {
+			st, ok := states[pr.ID]
+			if !ok {
+				continue
+			}
+			if st.LatencyMS > 0 {
+				pr.LatencyMS.Store(st.LatencyMS)
+			}
+			if st.Country != "" {
+				pr.Country = st.Country
+			}
+			restored++
+		}
+		if restored > 0 {
+			m.logger.Info("restored proxy state from redis", "provider", prov, "proxies", restored)
+		}
+	}
+	m.pool.Rebuild()
 }
 
 // addProxies pushes proxies into the pool. When the provider config carries an
@@ -256,10 +331,15 @@ func (m *Manager) AddProvider(cfg config.ProviderCfg) error {
 		proxies, err := p.Initial(ctx)
 		if err != nil {
 			m.logger.Warn("new provider initial load failed", "provider", cfg.Name, "err", err)
-			return nil
+		} else {
+			m.addProxies(cfg, proxies)
+			m.logger.Info("provider added", "provider", cfg.Name, "proxies", len(proxies))
 		}
-		m.addProxies(cfg, proxies)
-		m.logger.Info("provider added", "provider", cfg.Name, "proxies", len(proxies))
+	}
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider", "provider", cfg.Name, "err", err)
+		}
 	}
 	return nil
 }
@@ -277,6 +357,11 @@ func (m *Manager) RemoveProvider(name string) error {
 	for _, pr := range m.pool.All() {
 		if pr.Provider == name {
 			m.pool.Remove(pr.ID)
+		}
+	}
+	if m.persist != nil {
+		if err := m.persist.DeleteProvider(name); err != nil {
+			m.logger.Error("failed to delete provider from mysql", "provider", name, "err", err)
 		}
 	}
 	m.logger.Info("provider removed", "provider", name, "type", mp.provider.Kind().String())
@@ -329,6 +414,11 @@ func (m *Manager) UpdateProvider(name string, cfg config.ProviderCfg) error {
 	} else {
 		m.logger.Info("provider updated (disabled)", "provider", name)
 	}
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider update", "provider", name, "err", err)
+		}
+	}
 	return nil
 }
 
@@ -344,6 +434,8 @@ func (m *Manager) SetProviderEnabled(name string, enabled bool) error {
 		return nil
 	}
 	mp.enabled = enabled
+	mp.cfg.Enabled = enabled
+	cfg := mp.cfg
 	m.mu.Unlock()
 
 	if enabled {
@@ -364,6 +456,11 @@ func (m *Manager) SetProviderEnabled(name string, enabled bool) error {
 		}
 		m.logger.Info("provider disabled", "provider", name)
 	}
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider enabled", "provider", name, "err", err)
+		}
+	}
 	return nil
 }
 
@@ -378,6 +475,8 @@ func (m *Manager) SetProviderWeight(name string, weight int32) error {
 		return fmt.Errorf("provider %q not found", name)
 	}
 	mp.weight = weight
+	mp.cfg.Weight = int(weight)
+	cfg := mp.cfg
 	m.mu.Unlock()
 
 	for _, pr := range m.pool.All() {
@@ -387,6 +486,11 @@ func (m *Manager) SetProviderWeight(name string, weight int32) error {
 	}
 	m.pool.Rebuild()
 	m.logger.Info("provider weight updated", "provider", name, "weight", weight)
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider weight", "provider", name, "err", err)
+		}
+	}
 	return nil
 }
 
@@ -402,6 +506,7 @@ func (m *Manager) SetProviderPriority(name string, priority int, minRatio float6
 	}
 	mp.cfg.Priority = priority
 	mp.cfg.MinAliveRatio = minRatio
+	cfg := mp.cfg
 	m.mu.Unlock()
 
 	for _, pr := range m.pool.All() {
@@ -412,6 +517,11 @@ func (m *Manager) SetProviderPriority(name string, priority int, minRatio float6
 	}
 	m.pool.Rebuild()
 	m.logger.Info("provider priority updated", "provider", name, "priority", priority, "min_alive_ratio", minRatio)
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider priority", "provider", name, "err", err)
+		}
+	}
 	return nil
 }
 

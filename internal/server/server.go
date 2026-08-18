@@ -21,11 +21,12 @@ import (
 	"proxy-pool/internal/gateway"
 	"proxy-pool/internal/health"
 	"proxy-pool/internal/model"
+	"proxy-pool/internal/persist"
 	"proxy-pool/internal/pool"
 	"proxy-pool/internal/store"
 )
 
-//go:embed web/index.html
+//go:embed web/index.html web/login.html
 var webFS embed.FS
 
 type ProviderManager interface {
@@ -53,19 +54,21 @@ type AlertsManager interface {
 }
 
 type Server struct {
-	cfg        config.ServerConfig
-	pool       *pool.Pool
-	logger     *slog.Logger
-	mgr        ProviderManager
-	checker    *health.Checker
-	emitter    func(eventType, provider, message string, data map[string]any)
-	alerts     AlertsManager
-	auth       *auth.Manager
-	usage      *store.Store
-	groups     []config.GroupCfg
-	groupsFile string
-	groupsMu   sync.RWMutex
-	gateway    *gateway.Gateway
+	cfg          config.ServerConfig
+	pool         *pool.Pool
+	logger       *slog.Logger
+	mgr          ProviderManager
+	checker      *health.Checker
+	emitter      func(eventType, provider, message string, data map[string]any)
+	alerts       AlertsManager
+	auth         *auth.Manager
+	usage        *store.Store
+	groups       []config.GroupCfg
+	groupsFile   string
+	groupsMu     sync.RWMutex
+	groupsFromDB bool
+	gateway      *gateway.Gateway
+	db           *persist.MySQL
 }
 
 func New(cfg config.Config, mgr *pool.Manager, checker *health.Checker, logger *slog.Logger) *Server {
@@ -107,6 +110,33 @@ func (s *Server) AttachUsage(u *store.Store) {
 // AttachGroups wires explicit group scheduling config (optional).
 func (s *Server) AttachGroups(g []config.GroupCfg) {
 	s.groups = g
+}
+
+// AttachMySQL wires optional MySQL persistence for group configs. When groups
+// already exist in the database they take precedence over the file/config so
+// runtime edits survive restarts.
+func (s *Server) AttachMySQL(db *persist.MySQL) {
+	s.db = db
+	if db == nil {
+		return
+	}
+	fromDB, err := db.LoadGroups()
+	if err != nil {
+		s.logger.Error("failed to load groups from mysql", "err", err)
+		return
+	}
+	if len(fromDB) > 0 {
+		s.groupsMu.Lock()
+		s.groups = fromDB
+		s.groupsFromDB = true
+		s.groupsMu.Unlock()
+		s.pool.SetGroups(fromDB)
+	} else if len(s.groups) > 0 {
+		// seed the database from the configured groups on first start
+		if err := db.ReplaceGroups(s.groups); err != nil {
+			s.logger.Error("failed to seed groups into mysql", "err", err)
+		}
+	}
 }
 
 type handlerFunc func(ctx *fasthttp.RequestCtx)
@@ -159,6 +189,12 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		ctx.SetBody(indexHTML)
 	}
 
+	loginHTML, _ := webFS.ReadFile("web/login.html")
+	loginHandler := func(ctx *fasthttp.RequestCtx) {
+		ctx.SetContentType("text/html; charset=utf-8")
+		ctx.SetBody(loginHTML)
+	}
+
 	notFound := func(ctx *fasthttp.RequestCtx) {
 		ctx.Error("not found", fasthttp.StatusNotFound)
 	}
@@ -170,6 +206,15 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		if path == "/" || path == "/index.html" {
 			if method == "GET" {
 				indexHandler(ctx)
+				return
+			}
+			ctx.Error("method not allowed", fasthttp.StatusMethodNotAllowed)
+			return
+		}
+
+		if path == "/login" {
+			if method == "GET" {
+				loginHandler(ctx)
 				return
 			}
 			ctx.Error("method not allowed", fasthttp.StatusMethodNotAllowed)
@@ -956,6 +1001,16 @@ func (s *Server) handleAddAccount(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	// New accounts are enabled by default unless the caller explicitly sets
+	// enabled=false, so a minimal POST body still yields an active account.
+	var raw map[string]any
+	if json.Unmarshal(ctx.PostBody(), &raw) == nil {
+		if v, ok := raw["enabled"].(bool); ok {
+			req.Enabled = v
+		} else {
+			req.Enabled = true
+		}
+	}
 	if err := s.auth.AddAccount(req); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1193,6 +1248,13 @@ func (s *Server) handleRemoveGroup(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "group not found: " + name})
 		return
 	}
+	if s.db != nil {
+		if err := s.db.DeleteGroup(name); err != nil {
+			s.logger.Error("failed to delete group from mysql", "name", name, "err", err)
+			writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": "failed to delete group from mysql"})
+			return
+		}
+	}
 	s.applyGroups()
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 }
@@ -1246,6 +1308,18 @@ func (s *Server) validateGroup(g config.GroupCfg) error {
 			return errors.New("primary_weights references " + pn + " which is not in primary")
 		}
 	}
+	// primary_weights are usage shares expressed as percentages; when set for
+	// every primary provider they must sum to 100 so the pool balances to the
+	// intended load split.
+	if len(g.PrimaryWeights) == len(g.Primary) {
+		sum := 0
+		for _, w := range g.PrimaryWeights {
+			sum += w
+		}
+		if sum != 100 {
+			return errors.New("primary_weights must sum to 100 when specified for all primary providers")
+		}
+	}
 	for bi := range g.Backups {
 		b := &g.Backups[bi]
 		if b.Name == "" {
@@ -1274,6 +1348,11 @@ func (s *Server) applyGroups() {
 	if s.gateway != nil {
 		s.gateway.Rebuild()
 	}
+	if s.db != nil {
+		if err := s.db.ReplaceGroups(snapshot); err != nil {
+			s.logger.Error("failed to persist groups to mysql", "err", err)
+		}
+	}
 	if s.groupsFile != "" {
 		_ = s.persistGroups(snapshot)
 	}
@@ -1289,8 +1368,16 @@ func (s *Server) GroupList() []config.GroupCfg {
 }
 
 // SetGroupsFile enables JSON persistence and loads existing file if present.
+// When groups were already loaded from MySQL they take precedence, so the file
+// is only used as a fallback source when no database is configured.
 func (s *Server) SetGroupsFile(path string) error {
 	s.groupsFile = path
+	s.groupsMu.RLock()
+	fromDB := s.groupsFromDB
+	s.groupsMu.RUnlock()
+	if fromDB {
+		return nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

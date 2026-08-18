@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -132,11 +133,94 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.requireAuth(w)
 		return
 	}
+	// Special direct-connect endpoint: for pure-tunnel groups it hands back the
+	// upstream tunnel address so clients can connect straight to the tunnel
+	// provider, keeping data traffic off this host (and off its metered
+	// bandwidth). Only the URL path triggers it; regular proxy requests are
+	// unaffected.
+	if r.Method == http.MethodGet && r.URL.Path == "/direct" {
+		g.handleDirect(w, r, group)
+		return
+	}
 	if r.Method == http.MethodConnect {
 		g.handleConnect(w, r, group)
 		return
 	}
 	g.handleHTTP(w, r, group)
+}
+
+// findGroup returns the group config for a name.
+func (g *Gateway) findGroup(name string) (config.GroupCfg, bool) {
+	if g.groupsSrc == nil {
+		return config.GroupCfg{}, false
+	}
+	for _, c := range g.groupsSrc() {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return config.GroupCfg{}, false
+}
+
+// handleDirect serves the direct-connect endpoint. When every provider
+// referenced by the group is a tunnel with a single shared upstream address,
+// it returns that address so clients can bypass this host entirely. Otherwise
+// it explains why direct connection is not possible.
+func (g *Gateway) handleDirect(w http.ResponseWriter, r *http.Request, group string) {
+	cfg, ok := g.findGroup(group)
+	if !ok {
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	provSet := map[string]bool{}
+	for _, pn := range cfg.Primary {
+		provSet[pn] = true
+	}
+	for _, b := range cfg.Backups {
+		for _, pn := range b.Providers {
+			provSet[pn] = true
+		}
+	}
+
+	var upstream *model.Proxy
+	multi := false
+	for _, pr := range g.pool.All() {
+		if !provSet[pr.Provider] {
+			continue
+		}
+		if pr.Kind != model.KindTunnel {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"direct":null,"reason":"group contains non-tunnel providers; traffic must be relayed"}` + "\n"))
+			return
+		}
+		if upstream == nil {
+			upstream = pr
+		} else if upstream.Host != pr.Host || upstream.Port != pr.Port {
+			multi = true
+		}
+	}
+	if upstream == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"direct":null,"reason":"no tunnel provider available in group"}` + "\n"))
+		return
+	}
+	if multi {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"direct":null,"reason":"group references multiple tunnel upstreams; use the relay gateway instead"}` + "\n"))
+		return
+	}
+	scheme := upstream.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	hostPort := net.JoinHostPort(upstream.Host, strconv.Itoa(upstream.Port))
+	direct := scheme + "://" + hostPort
+	if upstream.Username != "" {
+		direct = scheme + "://" + url.UserPassword(upstream.Username, upstream.Password).String() + "@" + hostPort
+	}
+	g.logger.Info("gateway direct issued", "group", group, "direct", hostPort)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"direct":%s}`+"\n", strconv.Quote(direct))
 }
 
 // proxyBasicAuth reads credentials from the Proxy-Authorization header

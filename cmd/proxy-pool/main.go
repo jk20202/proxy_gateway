@@ -18,6 +18,8 @@ import (
 	"proxy-pool/internal/gateway"
 	"proxy-pool/internal/geo"
 	"proxy-pool/internal/health"
+	"proxy-pool/internal/model"
+	"proxy-pool/internal/persist"
 	"proxy-pool/internal/pool"
 	"proxy-pool/internal/server"
 	"proxy-pool/internal/store"
@@ -43,10 +45,57 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Optional persistent storage: MySQL holds low-frequency settings (accounts /
+	// groups / provider configs) so runtime edits survive restarts; Redis caches
+	// high-frequency proxy state (latency / country / alive).
+	// Connections are retried for a short window so the process tolerates a
+	// database that is still starting up (e.g. first run of docker compose).
+	db, err := openMySQLWithRetry(cfg.Storage.MySQL, logger, 10)
+	if err != nil {
+		logger.Error("failed to open mysql storage", "err", err)
+		os.Exit(1)
+	}
+	if db != nil {
+		defer db.Close()
+		logger.Info("mysql storage enabled")
+		// Provider configs stored in MySQL take precedence over config.yaml so
+		// runtime edits survive restarts. Seed the database on first start.
+		if fromDB, err := db.LoadProviders(); err != nil {
+			logger.Error("failed to load providers from mysql", "err", err)
+		} else if len(fromDB) > 0 {
+			cfg.Providers = fromDB
+		}
+	}
+	redis, err := openRedisWithRetry(cfg.Storage.Redis, logger, 10)
+	if err != nil {
+		logger.Error("failed to open redis storage", "err", err)
+		os.Exit(1)
+	}
+	if redis != nil {
+		defer redis.Close()
+		logger.Info("redis storage enabled")
+	}
+
 	mgr, err := pool.NewManager(cfg, logger)
 	if err != nil {
 		logger.Error("failed to init manager", "err", err)
 		os.Exit(1)
+	}
+	if db != nil {
+		mgr.AttachMySQL(db)
+		if err := mgr.SyncProvidersToDB(); err != nil {
+			logger.Error("failed to seed providers into mysql", "err", err)
+		}
+	}
+	if redis != nil {
+		mgr.AttachRedis(redis)
+		mgr.Pool().SetStateSink(func(pr *model.Proxy, removed bool) {
+			if removed {
+				redis.RemoveProxy(pr.Provider, pr.ID)
+			} else {
+				redis.PutProxyState(pr.Provider, pr)
+			}
+		})
 	}
 	if cfg.Geo.Enabled {
 		gc := geo.New(cfg.Geo.URL)
@@ -75,6 +124,11 @@ func main() {
 	go monitor.Run(ctx)
 
 	mgr.LoadInitial(ctx)
+	if redis != nil {
+		// Replay cached latency / country from Redis so health data survives
+		// restarts before the checker re-verifies aliveness.
+		mgr.RestoreFromRedis()
+	}
 
 	checker := health.NewChecker(cfg.HealthCheck, mgr.Pool(), logger)
 	go checker.Run(ctx)
@@ -84,13 +138,37 @@ func main() {
 	srv := server.New(*cfg, mgr, checker, logger)
 	srv.AttachAlerts(dispatcher)
 	srv.AttachGroups(cfg.Groups)
+	if db != nil {
+		// Groups stored in MySQL take precedence over config.yaml so runtime
+		// edits survive restarts; AttachMySQL seeds the table on first start.
+		srv.AttachMySQL(db)
+	}
 	if *groupsFile != "" {
 		if err := srv.SetGroupsFile(*groupsFile); err != nil {
 			logger.Error("failed to load group config file", "file", *groupsFile, "err", err)
 		}
 	}
-	if len(cfg.Accounts) > 0 {
-		srv.AttachAuth(auth.New(cfg.Accounts))
+	{
+		// Accounts stored in MySQL take precedence over config.yaml. When the
+		// database is empty the configured accounts are seeded into it.
+		accounts := cfg.Accounts
+		if db != nil {
+			if fromDB, err := db.LoadAccounts(); err != nil {
+				logger.Error("failed to load accounts from mysql", "err", err)
+			} else if len(fromDB) > 0 {
+				accounts = fromDB
+			}
+		}
+		if len(accounts) > 0 {
+			am := auth.New(accounts)
+			if db != nil {
+				am.AttachMySQL(db)
+				if err := am.SyncAll(); err != nil {
+					logger.Error("failed to seed accounts into mysql", "err", err)
+				}
+			}
+			srv.AttachAuth(am)
+		}
 	}
 	usageStore, err := store.Open(cfg.DB, logger)
 	if err != nil {
@@ -138,4 +216,42 @@ func main() {
 	<-ctx.Done()
 	logger.Info("shutting down...")
 	_ = srvCfg.Shutdown()
+}
+
+// openMySQLWithRetry tries to open MySQL, retrying up to n attempts with a 3s
+// pause between them. An unconfigured storage returns (nil, nil) immediately.
+func openMySQLWithRetry(cfg config.MySQLConfig, logger *slog.Logger, n int) (*persist.MySQL, error) {
+	var lastErr error
+	for i := 0; i < n; i++ {
+		db, err := persist.OpenMySQL(cfg, logger)
+		if err == nil {
+			return db, nil
+		}
+		lastErr = err
+		if db != nil {
+			db.Close()
+		}
+		logger.Warn("mysql not ready, retrying", "attempt", i+1, "err", err)
+		time.Sleep(3 * time.Second)
+	}
+	return nil, lastErr
+}
+
+// openRedisWithRetry tries to open Redis, retrying up to n attempts with a 3s
+// pause between them. An unconfigured storage returns (nil, nil) immediately.
+func openRedisWithRetry(cfg config.RedisConfig, logger *slog.Logger, n int) (*persist.Redis, error) {
+	var lastErr error
+	for i := 0; i < n; i++ {
+		r, err := persist.OpenRedis(cfg, logger)
+		if err == nil {
+			return r, nil
+		}
+		lastErr = err
+		if r != nil {
+			r.Close()
+		}
+		logger.Warn("redis not ready, retrying", "attempt", i+1, "err", err)
+		time.Sleep(3 * time.Second)
+	}
+	return nil, lastErr
 }

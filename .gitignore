@@ -178,3 +178,7 @@ usage.db
 *.lz
 *.lzma
 *.iso
+
+# Build artifacts & runtime state
+/proxy-pool
+groups.json

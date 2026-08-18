@@ -16,6 +16,31 @@ type Config struct {
 	DB          DBConfig      `yaml:"db" json:"db"`
 	Alerts      AlertConfig   `yaml:"alerts" json:"alerts"`
 	Geo         GeoConfig     `yaml:"geo" json:"geo"`
+	Storage     StorageConfig `yaml:"storage" json:"storage"`
+}
+
+// StorageConfig configures persistent storage: MySQL for low-frequency settings
+// (accounts / groups / provider configs) and Redis for high-frequency proxy
+// runtime state (latency / country / alive). Both are optional; when disabled
+// the process falls back to in-memory state (accounts/groups persisted to JSON
+// files as before).
+type StorageConfig struct {
+	MySQL MySQLConfig `yaml:"mysql" json:"mysql"`
+	Redis RedisConfig `yaml:"redis" json:"redis"`
+}
+
+type MySQLConfig struct {
+	DSN  string `yaml:"dsn" json:"dsn"` // e.g. proxy:proxy_pass@tcp(127.0.0.1:3306)/proxy_pool
+	Addr string `yaml:"addr" json:"addr"`
+	User string `yaml:"user" json:"user"`
+	Pass string `yaml:"pass" json:"pass"`
+	DB   string `yaml:"db" json:"db"`
+}
+
+type RedisConfig struct {
+	Addr     string `yaml:"addr" json:"addr"`
+	Password string `yaml:"password" json:"password"`
+	DB       int    `yaml:"db" json:"db"`
 }
 
 // GeoConfig configures IP geolocation used to tag each proxy with its country.
