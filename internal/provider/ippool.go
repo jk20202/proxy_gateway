@@ -160,6 +160,7 @@ func (p *IPPool) parse(body []byte) []*model.Proxy {
 			Username:        ipc.Username,
 			Password:        ipc.Password,
 			CheckURL:        p.CheckURL(),
+			CheckURLs:       p.cfg.EnabledCheckURLs(),
 			CheckIntervalMS: int64(p.cfg.CheckIntervalS) * 1000,
 			Priority:        p.cfg.Priority,
 			MinAliveRatio:   p.cfg.MinAliveRatio,

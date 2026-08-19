@@ -139,6 +139,7 @@ func (p *FreePool) parse(body []byte) []*model.Proxy {
 			Port:            d.Port,
 			Weight:          int32(p.cfg.Weight),
 			CheckURL:        p.CheckURL(),
+			CheckURLs:       p.cfg.EnabledCheckURLs(),
 			CheckIntervalMS: int64(p.cfg.CheckIntervalS) * 1000,
 			Priority:        p.cfg.Priority,
 			MinAliveRatio:   p.cfg.MinAliveRatio,

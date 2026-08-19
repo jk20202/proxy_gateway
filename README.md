@@ -237,7 +237,15 @@ health_check:
   interval_s: 60       # 健康检查周期（秒）：每分钟检测一轮
   timeout_ms: 6000     # 单次探测超时（需测出免费代理 3s 内的真实延迟）
   concurrency: 256     # 并发探测数（免费代理量级大，建议调高）
-  check_url: "http://httpbin.org/ip"
+  check_url: "http://httpbin.org/ip"   # 单 URL 兜底（未配置 check_urls 且 provider 未指定时使用）
+  # 5 个固定默认测试 URL：新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；
+  # 也可在新增/编辑 Provider 时自定义新增多个测试 URL。任一启用的 URL 可达即判定该代理存活。
+  check_urls:
+    - { name: "gstatic",    url: "http://www.gstatic.com/generate_204", enabled: true }
+    - { name: "google",     url: "https://www.google.com/generate_204", enabled: true }
+    - { name: "baidu",      url: "https://www.baidu.com/",              enabled: true }
+    - { name: "httpbin",    url: "http://httpbin.org/ip",               enabled: true }
+    - { name: "cloudflare", url: "https://www.cloudflare.com/",         enabled: true }
   max_fails: 3          # 连续失败次数，达到后移出可用池（免费代理一次失败即删）
   rebuild_interval_ms: 200
 
@@ -307,6 +315,10 @@ providers:
     priority: 0
     min_alive_ratio: 0
     check_url: "http://www.gstatic.com/generate_204"   # 免费代理的真实连通性检测目标（204 轻量探测）
+    # 每个 provider 也可配置多个测试 URL（check_urls，含自定义与全局默认快照，每项 enabled 独立开关）：
+    # check_urls:
+    #   - { name: "gstatic", url: "http://www.gstatic.com/generate_204", enabled: true }
+    #   - { name: "baidu",   url: "https://www.baidu.com/",              enabled: true }
     free:
       feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"  # 免费代理 JSON 源
       refresh_interval_s: 600     # 每 10 分钟重新采集一次
@@ -734,3 +746,5 @@ go test ./...
 ## 自定义 Provider
 
 实现 `internal/provider.Provider` 接口（`Name` / `Kind` / `Weight` / `CheckURL` / `Initial` / `Refresh`），在 `provider.New` 中注册类型，即可接入任意自有代理平台。
+
+创建代理对象时，把该 provider 配置中的启用测试 URL 一并写入 `model.Proxy.CheckURLs`（`cfg.EnabledCheckURLs()`），健康检测会对全部启用 URL 并行探测，任一可达即判定存活；未配置时回退到单 `CheckURL` 或全局默认 `health_check.check_urls`。

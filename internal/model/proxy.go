@@ -39,7 +39,10 @@ type Proxy struct {
 
 	Weight   int32
 	CheckURL string
-	ExpireAt int64
+	// CheckURLs 启用的健康检测测试 URL 列表（已解析，含全局默认与自定义）。任一可达即存活。
+	// 为空时健康检测回退到 CheckURL 或全局默认。
+	CheckURLs []string
+	ExpireAt  int64
 
 	// CheckIntervalMS 检测频率：池内 IP 多久检测一次延迟。0=使用全局 health_check.interval_s。
 	CheckIntervalMS int64
@@ -76,6 +79,7 @@ func (p *Proxy) Clone() *Proxy {
 		Password:        p.Password,
 		Weight:          p.Weight,
 		CheckURL:        p.CheckURL,
+		CheckURLs:       append([]string(nil), p.CheckURLs...),
 		ExpireAt:        p.ExpireAt,
 		CheckIntervalMS: p.CheckIntervalMS,
 		Priority:        p.Priority,

@@ -9,7 +9,15 @@ health_check:
   interval_s: 60               # 每分钟检测一次所有代理
   timeout_ms: 6000           # 免费代理延迟阈值 3s 内需测出真实延迟，故超时放宽到 6s
   concurrency: 256           # 免费代理量级大，并发调高避免检测积压
-  check_url: "http://127.0.0.1:10002/"  # mock target
+  check_url: "http://127.0.0.1:10002/"  # mock target（单 URL 兜底，通常不用）
+  # 5 个固定默认测试 URL：新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；
+  # 也可以为 Provider 自定义多个测试 URL。任一启用的 URL 可达即判定该代理存活。
+  check_urls:
+    - { name: "gstatic",   url: "http://www.gstatic.com/generate_204", enabled: true }
+    - { name: "google",    url: "https://www.google.com/generate_204", enabled: true }
+    - { name: "baidu",     url: "https://www.baidu.com/",              enabled: true }
+    - { name: "httpbin",   url: "http://httpbin.org/ip",               enabled: true }
+    - { name: "cloudflare", url: "https://www.cloudflare.com/",         enabled: true }
   max_fails: 3
   rebuild_interval_ms: 200
 

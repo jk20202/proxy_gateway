@@ -201,6 +201,92 @@ func TestCheckerFreeProxyDeletedOnHighLatency(t *testing.T) {
 	}
 }
 
+func TestCheckerAliveWhenAnyCheckURLReachable(t *testing.T) {
+	// upstream targets: only the second one works through the failing proxy
+	deadTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Log("dead target hit (unexpected)")
+	}))
+	defer deadTarget.Close()
+
+	target := &proxyTarget{}
+	ts := httptest.NewServer(http.HandlerFunc(target.handler))
+	defer ts.Close()
+
+	proxySrv := startProxyServer(fakeProxy(ts.URL, nil))
+	defer proxySrv.Close()
+	host, portStr := splitHostPort(proxySrv.URL[len("http://"):])
+
+	p := pool.NewPool()
+	pr := &model.Proxy{
+		ID:       "multi1",
+		Provider: "test",
+		Kind:     model.KindIPPool,
+		Scheme:   "http",
+		Host:     host,
+		Port:     atoi(portStr),
+		Weight:   1,
+		CheckURLs: []string{
+			"http://127.0.0.1:1/", // unreachable
+			ts.URL,                // reachable
+		},
+	}
+	pr.Alive.Store(true)
+	p.Add(pr)
+
+	cfg := config.HealthConfig{IntervalSeconds: 1, TimeoutMs: 2000, Concurrency: 8, MaxFails: 3}
+	c := NewChecker(cfg, p, newLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c.checkAll(ctx)
+	if !pr.Alive.Load() {
+		t.Fatal("proxy should stay alive when any of its check URLs is reachable")
+	}
+}
+
+func TestCheckerFallsBackToGlobalDefaultCheckURLs(t *testing.T) {
+	// proxy with no provider-specific URL: falls back to global defaults
+	target := &proxyTarget{}
+	ts := httptest.NewServer(http.HandlerFunc(target.handler))
+	defer ts.Close()
+
+	proxySrv := startProxyServer(fakeProxy(ts.URL, nil))
+	defer proxySrv.Close()
+	host, portStr := splitHostPort(proxySrv.URL[len("http://"):])
+
+	p := pool.NewPool()
+	pr := &model.Proxy{
+		ID:       "global1",
+		Provider: "test",
+		Kind:     model.KindIPPool,
+		Scheme:   "http",
+		Host:     host,
+		Port:     atoi(portStr),
+		Weight:   1,
+	}
+	pr.Alive.Store(true)
+	p.Add(pr)
+
+	cfg := config.HealthConfig{
+		IntervalSeconds: 1,
+		TimeoutMs:       2000,
+		Concurrency:     8,
+		MaxFails:        3,
+		CheckURLs: []config.CheckURLItem{
+			{Name: "unreachable", URL: "http://127.0.0.1:1/"},
+			{Name: "reachable", URL: ts.URL},
+		},
+	}
+	c := NewChecker(cfg, p, newLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c.checkAll(ctx)
+	if !pr.Alive.Load() {
+		t.Fatal("proxy should stay alive via global default check URLs")
+	}
+}
+
 func splitHostPort(addr string) (string, string) {
 	for i := len(addr) - 1; i >= 0; i-- {
 		if addr[i] == ':' {

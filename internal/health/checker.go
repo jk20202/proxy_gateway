@@ -147,12 +147,12 @@ func (c *Checker) checkAll(ctx context.Context) {
 }
 
 func (c *Checker) checkOne(ctx context.Context, pr *model.Proxy) {
-	checkURL := pr.CheckURL
-	if checkURL == "" {
-		checkURL = c.cfg.CheckURL
+	checkURLs := c.resolveCheckURLs(pr)
+	if len(checkURLs) == 0 {
+		return
 	}
 	start := time.Now()
-	ok := c.probe(ctx, pr, checkURL)
+	ok := c.probe(ctx, pr, checkURLs)
 	latency := time.Since(start)
 
 	if ok {
@@ -176,6 +176,32 @@ func (c *Checker) checkOne(ctx context.Context, pr *model.Proxy) {
 	c.pool.MarkFailed(pr.ID, latency.Milliseconds())
 }
 
+// DefaultCheckURLs returns the globally configured default health-check
+// target URLs (with their enabled state), used by the admin API to render the
+// provider test-URL editor in the web console.
+func (c *Checker) DefaultCheckURLs() []config.CheckURLItem {
+	return c.cfg.CheckURLs
+}
+
+// resolveCheckURLs computes the effective health-check URL list for a proxy:
+// provider-specific URLs first, then the single legacy check_url, then the
+// global defaults, then the legacy global check_url.
+func (c *Checker) resolveCheckURLs(pr *model.Proxy) []string {
+	if len(pr.CheckURLs) > 0 {
+		return pr.CheckURLs
+	}
+	if pr.CheckURL != "" {
+		return []string{pr.CheckURL}
+	}
+	if urls := c.cfg.EnabledCheckURLs(); len(urls) > 0 {
+		return urls
+	}
+	if c.cfg.CheckURL != "" {
+		return []string{c.cfg.CheckURL}
+	}
+	return nil
+}
+
 // deleteThreshold returns the latency threshold above which a free proxy is
 // deleted. It prefers the provider's configured value; falls back to 3000ms.
 func deleteThreshold(pr *model.Proxy) int64 {
@@ -185,7 +211,13 @@ func deleteThreshold(pr *model.Proxy) int64 {
 	return 3000
 }
 
-func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURL string) bool {
+// probe reports whether the proxy can reach ANY of the given check URLs. All
+// URLs are probed in parallel sharing one client; the first success cancels
+// the remaining in-flight probes.
+func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string) bool {
+	if len(checkURLs) == 0 {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -219,6 +251,32 @@ func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURL string) b
 		},
 	}
 
+	result := make(chan bool, len(checkURLs))
+	var wg sync.WaitGroup
+	for _, checkURL := range checkURLs {
+		checkURL := checkURL
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if c.probeOne(ctx, client, checkURL) {
+				select {
+				case result <- true:
+					cancel() // stop remaining probes
+				default:
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	select {
+	case <-result:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Checker) probeOne(ctx context.Context, client *http.Client, checkURL string) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {
 		return false

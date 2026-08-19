@@ -43,6 +43,7 @@ func (t *Tunnel) Initial(ctx context.Context) ([]*model.Proxy, error) {
 		Password:        tc.Password,
 		Weight:          int32(t.cfg.Weight),
 		CheckURL:        t.CheckURL(),
+		CheckURLs:       t.cfg.EnabledCheckURLs(),
 		CheckIntervalMS: int64(t.cfg.CheckIntervalS) * 1000,
 		Priority:        t.cfg.Priority,
 		MinAliveRatio:   t.cfg.MinAliveRatio,

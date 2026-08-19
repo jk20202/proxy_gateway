@@ -135,6 +135,7 @@ func (p *Pool) Add(pr *model.Proxy) {
 		old.Kind = pr.Kind
 		old.Weight = pr.Weight
 		old.CheckURL = pr.CheckURL
+		old.CheckURLs = pr.CheckURLs
 		old.Free = pr.Free
 		old.Priority = pr.Priority
 		old.MinAliveRatio = pr.MinAliveRatio

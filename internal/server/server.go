@@ -617,7 +617,11 @@ func (s *Server) providerStats() map[string]any {
 // ---- Admin API ----
 
 func (s *Server) handleListProviders(ctx *fasthttp.RequestCtx) {
-	writeJSON(ctx, fasthttp.StatusOK, map[string]any{"providers": s.mgr.ProviderList()})
+	resp := map[string]any{"providers": s.mgr.ProviderList()}
+	if s.checker != nil {
+		resp["default_check_urls"] = s.checker.DefaultCheckURLs()
+	}
+	writeJSON(ctx, fasthttp.StatusOK, resp)
 }
 
 func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {

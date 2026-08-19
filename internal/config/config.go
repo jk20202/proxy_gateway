@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -141,13 +142,47 @@ type ServerConfig struct {
 	GatewayListen string `yaml:"gateway_listen"`
 }
 
+// CheckURLItem is one health-check target URL. A proxy is considered healthy
+// when it can reach ANY enabled check URL, so listing several targets lets the
+// same proxy be validated against different sites (e.g. domestic + overseas).
+// Enabled defaults to true when omitted.
+type CheckURLItem struct {
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url" json:"url"`
+	Enabled *bool  `yaml:"enabled" json:"enabled"`
+}
+
+// IsEnabled reports whether the check URL participates in health checks.
+// A nil Enabled value (field omitted) means enabled.
+func (i CheckURLItem) IsEnabled() bool {
+	return i.Enabled == nil || *i.Enabled
+}
+
+// EnabledCheckURLs returns the enabled, non-blank check URLs of a list.
+func EnabledCheckURLs(items []CheckURLItem) []string {
+	var out []string
+	for _, it := range items {
+		if !it.IsEnabled() {
+			continue
+		}
+		if u := strings.TrimSpace(it.URL); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 type HealthConfig struct {
-	IntervalSeconds   int    `yaml:"interval_s"`
-	TimeoutMs         int    `yaml:"timeout_ms"`
-	Concurrency       int    `yaml:"concurrency"`
-	CheckURL          string `yaml:"check_url"`
-	MaxFails          int    `yaml:"max_fails"`
-	RebuildIntervalMs int    `yaml:"rebuild_interval_ms"`
+	IntervalSeconds int    `yaml:"interval_s"`
+	TimeoutMs       int    `yaml:"timeout_ms"`
+	Concurrency     int    `yaml:"concurrency"`
+	CheckURL        string `yaml:"check_url"`
+	// CheckURLs is the list of default health-check target URLs. When a
+	// provider does not configure its own check URLs, the enabled defaults are
+	// used. All defaults are enabled unless marked otherwise.
+	CheckURLs         []CheckURLItem `yaml:"check_urls"`
+	MaxFails          int            `yaml:"max_fails"`
+	RebuildIntervalMs int            `yaml:"rebuild_interval_ms"`
 }
 
 type ProviderCfg struct {
@@ -161,6 +196,10 @@ type ProviderCfg struct {
 	MinAliveRatio  float64 `yaml:"min_alive_ratio" json:"min_alive_ratio"`
 	StickySeconds  int     `yaml:"sticky_seconds" json:"sticky_seconds"`
 	CheckURL       string  `yaml:"check_url" json:"check_url"`
+	// CheckURLs 自定义健康检测测试 URL 列表（可多个，每个可独立启用/停用）。
+	// 任一启用的 URL 可达即判定代理存活；未配置时回退到 check_url 或全局 health_check.check_urls。
+	// 新增/编辑 Provider 的界面会把 5 个全局默认测试 URL（含启用状态）与自定义 URL 一起快照到这里。
+	CheckURLs []CheckURLItem `yaml:"check_urls" json:"check_urls"`
 	// Country 可选：显式指定该 provider 所有代理的国家代码（ISO alpha-2），
 	// 入池后直接打标，跳过 IP 归属查询。
 	Country string          `yaml:"country" json:"country"`
@@ -198,6 +237,16 @@ type FreePoolConfig struct {
 	MaxProxies      int    `yaml:"max_proxies" json:"max_proxies"`
 	MaxSpeedMS      int    `yaml:"max_speed_ms" json:"max_speed_ms"`           // 只采集上报延迟低于该值的代理；默认 3000 (3s)
 	DeleteLatencyMS int    `yaml:"delete_latency_ms" json:"delete_latency_ms"` // 健康检测延迟超过该值直接删除；默认 3000 (3s)
+}
+
+// EnabledCheckURLs returns this provider's enabled custom health-check URLs.
+func (p ProviderCfg) EnabledCheckURLs() []string {
+	return EnabledCheckURLs(p.CheckURLs)
+}
+
+// EnabledCheckURLs returns the enabled default health-check URLs.
+func (h HealthConfig) EnabledCheckURLs() []string {
+	return EnabledCheckURLs(h.CheckURLs)
 }
 
 func Load(path string) (*Config, error) {
@@ -241,6 +290,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.HealthCheck.CheckURL == "" {
 		cfg.HealthCheck.CheckURL = "http://httpbin.org/ip"
 	}
+	if len(cfg.HealthCheck.CheckURLs) == 0 {
+		cfg.HealthCheck.CheckURLs = defaultCheckURLs()
+	}
 	if cfg.HealthCheck.MaxFails == 0 {
 		cfg.HealthCheck.MaxFails = 3
 	}
@@ -270,6 +322,20 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Geo.URL == "" {
 		cfg.Geo.URL = "http://ip-api.com/batch"
+	}
+}
+
+// defaultCheckURLs returns the 5 built-in default health-check targets used
+// when health_check.check_urls is not configured. All are enabled by default;
+// they can be overridden in yaml or per-provider in the web console.
+func defaultCheckURLs() []CheckURLItem {
+	t := true
+	return []CheckURLItem{
+		{Name: "gstatic", URL: "http://www.gstatic.com/generate_204", Enabled: &t},
+		{Name: "google", URL: "https://www.google.com/generate_204", Enabled: &t},
+		{Name: "baidu", URL: "https://www.baidu.com/", Enabled: &t},
+		{Name: "httpbin", URL: "http://httpbin.org/ip", Enabled: &t},
+		{Name: "cloudflare", URL: "https://www.cloudflare.com/", Enabled: &t},
 	}
 }
 
@@ -334,6 +400,11 @@ func (c *Config) Group(name string) (GroupCfg, bool) {
 func (c *Config) Validate() error {
 	if len(c.Providers) == 0 {
 		return fmt.Errorf("at least one provider is required")
+	}
+	for i, it := range c.HealthCheck.CheckURLs {
+		if strings.TrimSpace(it.URL) == "" {
+			return fmt.Errorf("health_check.check_urls[%d]: url is required", i)
+		}
 	}
 	provNames := map[string]bool{}
 	for i := range c.Providers {
@@ -400,8 +471,13 @@ func (c *Config) Validate() error {
 			if p.Free.RefreshSeconds == 0 {
 				p.Free.RefreshSeconds = 60
 			}
-			if p.CheckURL == "" {
-				return fmt.Errorf("providers[%s]: check_url is required for free proxies", p.Name)
+			if p.CheckURL == "" && len(p.CheckURLs) == 0 {
+				return fmt.Errorf("providers[%s]: check_url or check_urls is required for free proxies", p.Name)
+			}
+		}
+		for _, it := range p.CheckURLs {
+			if strings.TrimSpace(it.URL) == "" {
+				return fmt.Errorf("providers[%s]: check_urls[%s] url is required", p.Name, it.Name)
 			}
 		}
 		if p.Weight == 0 {

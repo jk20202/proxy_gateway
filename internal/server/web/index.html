@@ -220,6 +220,43 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
 .provider-pick { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .provider-pick label { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--text); font-size: 12px; }
 .provider-pick label input { width: auto; }
+.check-urls { display: flex; flex-direction: column; gap: 8px; }
+.check-url-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px;
+}
+.cu-check { display: inline-flex; align-items: center; flex: none; cursor: pointer; margin: 0; }
+.cu-check input { display: none; }
+.cu-slider {
+  position: relative; width: 32px; height: 17px; border-radius: 999px;
+  background: var(--border); transition: .2s; flex: none;
+}
+.cu-slider:before {
+  content: ""; position: absolute; height: 11px; width: 11px;
+  left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s;
+}
+.cu-check input:checked + .cu-slider { background: var(--green); }
+.cu-check input:checked + .cu-slider:before { transform: translateX(15px); }
+.cu-url {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid var(--border);
+  color: var(--text); padding: 5px 8px; border-radius: 5px;
+  font-size: 12px; font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+}
+.cu-url:focus { outline: none; border-color: var(--blue); }
+.cu-url-static { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; }
+.cu-tag {
+  flex: none; font-size: 10px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+}
+.cu-tag.custom { color: var(--blue); border-color: rgba(59,130,246,.4); }
+.cu-remove {
+  flex: none; width: 22px; height: 22px; line-height: 1; font-size: 14px;
+  color: var(--muted); background: transparent; border: none; cursor: pointer; border-radius: 4px;
+}
+.cu-remove:hover { color: var(--red, #ef4444); background: rgba(239,68,68,.12); }
+.cu-add { font-size: 12px; color: var(--blue); cursor: pointer; background: transparent; border: none; padding: 2px 0; }
+.cu-add:hover { text-decoration: underline; }
 .backup-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: var(--bg); }
 .backup-row .br-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .backup-row .br-head select { flex: 1; min-width: 200px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 7px 10px; font-size: 13px; }
@@ -590,8 +627,11 @@ tr.dead-row td { opacity: .5; }
     </div>
 
     <div class="form-row">
-      <label>健康检查 URL（可空，默认全局）</label>
-      <input id="p-check-url" placeholder="http://httpbin.org/ip">
+      <label>测试 URL 列表（勾选启用；任一可达即判定该代理存活。默认 5 个来自全局配置，可取消勾选；也可自定义新增多个）</label>
+    </div>
+    <div class="check-urls" id="p-check-urls"></div>
+    <div class="form-row" style="margin-bottom:14px;">
+      <button type="button" class="cu-add" onclick="addCustomCheckURL()">+ 添加自定义测试 URL</button>
     </div>
     <div class="form-row">
       <label>国家/地区（ISO 代码，如 CN/US/HK；可空=自动通过 IP 归属查询）</label>
@@ -727,6 +767,8 @@ tr.dead-row td { opacity: .5; }
 <script>
 const API = '';
 let state = { status: null, providers: [], proxies: [], proxyPage: 1, groups: [], accounts: [], usage: [] };
+let defaultCheckURLs = [];   // 全局默认测试 URL: [{name,url,enabled}]
+let customCheckURLs = [];    // 自定义测试 URL: [{name,url,enabled}]
 let proxyAutoRefresh = true;
 const PAGE_SIZE = 20;
 let token = localStorage.getItem('pp_token') || '';
@@ -829,6 +871,7 @@ async function loadProviders() {
   try {
     const data = await api('/api/v1/admin/providers');
     state.providers = data.providers || [];
+    defaultCheckURLs = (data.default_check_urls || []).map(d => ({ name: d.name || '', url: d.url || '', enabled: d.enabled !== false }));
     renderProviders();
   } catch (e) { toast('加载 Provider 失败: ' + e.message, true); }
 }
@@ -1767,7 +1810,7 @@ let editingProviderName = null;
 function openAddProvider() {
   editingProviderName = null;
   document.getElementById('provider-modal-title').textContent = '添加 Provider';
-  ['p-name','p-tunnel-gateway','p-tunnel-user','p-tunnel-pass','p-extract-url','p-extract-user','p-extract-pass','p-check-url','p-country'].forEach(id => document.getElementById(id).value = '');
+  ['p-name','p-tunnel-gateway','p-tunnel-user','p-tunnel-pass','p-extract-url','p-extract-user','p-extract-pass','p-country'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('p-check-interval').value = 0;
   document.getElementById('p-min-ratio').value = 0;
   document.getElementById('p-sticky-seconds').value = 60;
@@ -1776,6 +1819,9 @@ function openAddProvider() {
   document.getElementById('p-expire').value = 600;
   document.getElementById('p-type').value = 'tunnel';
   document.getElementById('p-name').readOnly = false;
+  customCheckURLs = [];
+  defaultCheckURLs.forEach(d => { d.enabled = true; }); // 默认全部勾选
+  renderCheckURLs();
   toggleTunnelFields();
   document.getElementById('provider-modal').classList.add('show');
 }
@@ -1792,8 +1838,20 @@ function openEditProvider(name) {
   document.getElementById('p-check-interval').value = cfg.check_interval_s || 0;
   document.getElementById('p-min-ratio').value = (p.min_alive_ratio !== undefined ? p.min_alive_ratio : cfg.min_alive_ratio) || 0;
   document.getElementById('p-sticky-seconds').value = p.sticky_seconds || cfg.sticky_seconds || 60;
-  document.getElementById('p-check-url').value = cfg.check_url || '';
   document.getElementById('p-country').value = cfg.country || '';
+
+  // 测试 URL：按 URL 匹配已保存的启用状态；未保存的默认项默认勾选。
+  // 兼容旧配置：只有 check_url 而无 check_urls 时，把 check_url 展示为自定义 URL。
+  const saved = (cfg.check_urls || []).map(u => ({ name: u.name || '', url: u.url || '', enabled: u.enabled !== false }));
+  defaultCheckURLs.forEach(d => {
+    const m = saved.find(s => s.url === d.url);
+    d.enabled = m ? m.enabled : true;
+  });
+  customCheckURLs = saved.filter(s => !defaultCheckURLs.some(d => d.url === s.url));
+  if (!(cfg.check_urls || []).length && cfg.check_url) {
+    customCheckURLs = [{ name: '', url: cfg.check_url, enabled: true }];
+  }
+  renderCheckURLs();
 
   const t = cfg.tunnel || {};
   document.getElementById('p-tunnel-scheme').value = t.scheme || 'http';
@@ -1835,6 +1893,56 @@ function toggleTunnelFields() {
   document.getElementById('free-fields').style.display = type === 'free' ? '' : 'none';
 }
 
+// ---- 测试 URL 编辑 ----
+
+function setCheckURLEnabled(kind, idx, on) {
+  const arr = kind === 'c' ? customCheckURLs : defaultCheckURLs;
+  if (arr[idx]) arr[idx].enabled = !!on;
+}
+
+function setCheckURLURL(kind, idx, val) {
+  const arr = kind === 'c' ? customCheckURLs : defaultCheckURLs;
+  if (arr[idx]) arr[idx].url = val;
+}
+
+function addCustomCheckURL() {
+  customCheckURLs.push({ name: '', url: '', enabled: true });
+  renderCheckURLs();
+}
+
+function removeCustomCheckURL(idx) {
+  customCheckURLs.splice(idx, 1);
+  renderCheckURLs();
+}
+
+function renderCheckURLs() {
+  const box = document.getElementById('p-check-urls');
+  if (!box) return;
+  const rows = [];
+  defaultCheckURLs.forEach((d, i) => {
+    rows.push(`<div class="check-url-row">
+      <label class="cu-check" title="${esc(d.name)} 默认测试 URL">
+        <input type="checkbox" class="cu-enabled" ${d.enabled ? 'checked' : ''} onchange="setCheckURLEnabled('d',${i},this.checked)">
+        <span class="cu-slider"></span>
+      </label>
+      <span class="cu-url-static" title="${esc(d.url)}">${esc(d.url)}</span>
+      <span class="cu-tag">默认</span>
+    </div>`);
+  });
+  customCheckURLs.forEach((c, i) => {
+    rows.push(`<div class="check-url-row">
+      <label class="cu-check" title="自定义测试 URL">
+        <input type="checkbox" class="cu-enabled" ${c.enabled ? 'checked' : ''} onchange="setCheckURLEnabled('c',${i},this.checked)">
+        <span class="cu-slider"></span>
+      </label>
+      <input class="cu-url" value="${esc(c.url)}" oninput="setCheckURLURL('c',${i},this.value)" placeholder="https://自定义测试地址">
+      <span class="cu-tag custom">自定义</span>
+      <button type="button" class="cu-remove" title="移除该测试 URL" onclick="removeCustomCheckURL(${i})">×</button>
+    </div>`);
+  });
+  box.innerHTML = rows.join('');
+}
+
 async function submitProvider() {
   const type = document.getElementById('p-type').value;
   const body = {
@@ -1843,9 +1951,14 @@ async function submitProvider() {
     enabled: true,
     check_interval_s: parseInt(document.getElementById('p-check-interval').value) || 0,
     min_alive_ratio: parseFloat(document.getElementById('p-min-ratio').value) || 0,
-    check_url: document.getElementById('p-check-url').value.trim() || undefined,
     country: document.getElementById('p-country').value.trim().toUpperCase() || undefined,
   };
+  const check_urls = [
+    ...defaultCheckURLs.map(d => ({ name: d.name, url: d.url, enabled: d.enabled })),
+    ...customCheckURLs.filter(c => (c.url || '').trim()).map(c => ({ name: c.name, url: c.url.trim(), enabled: c.enabled })),
+  ];
+  if (!check_urls.some(u => u.enabled)) { toast('至少保留一个启用的测试 URL', true); return; }
+  body.check_urls = check_urls;
   if (!body.name) { toast('名称不能为空', true); return; }
   if (type === 'tunnel') {
     body.tunnel = {
@@ -2038,7 +2151,7 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/providers',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/providers", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ]\n}',
+    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ],\n  "default_check_urls": [\n    {"name": "gstatic", "url": "http://www.gstatic.com/generate_204", "enabled": true}\n  ]\n}',
     resp_fields: [
       { name: 'providers', type: 'array<object>', desc: 'Provider 列表' },
       { name: 'providers[].name', type: 'string', desc: 'Provider 名称' },
@@ -2048,6 +2161,7 @@ const APIDOC_ENDPOINTS = [
       { name: 'providers[].check_interval_s', type: 'integer', desc: '检测频率（秒），0 表示用全局 health_check.interval_s' },
       { name: 'providers[].total', type: 'integer', desc: '代理总数' },
       { name: 'providers[].alive', type: 'integer', desc: '存活代理数' },
+      { name: 'default_check_urls', type: 'array<object>', desc: '全局默认测试 URL（name/url/enabled），新增 Provider 时默认全部勾选，可取消勾选' },
     ],
   },
   {
@@ -2057,10 +2171,11 @@ const APIDOC_ENDPOINTS = [
       { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
       { name: 'enabled', type: 'boolean', req: false, desc: '是否启用，默认 true', in: 'body' },
       { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
+      { name: 'check_urls', type: 'array<object>', req: false, desc: '测试 URL 列表 [{name,url,enabled}]，含全局默认快照与自定义；任一启用的 URL 可达即判定存活。全部禁用或未配置时回退全局默认', in: 'body' },
       { name: 'tunnel', type: 'object', req: false, desc: 'tunnel 类型配置：scheme / gateway / port / username / password', in: 'body' },
-    ], body: '{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080,"username":"u","password":"p"}}',
-    curl: 'curl -X POST {HOST}/api/v1/admin/providers \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080}}\'',
-    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers",\n    json={"name": "my-tunnel-01", "type": "tunnel", "enabled": True, "check_interval_s": 60, "tunnel": {"scheme": "http", "gateway": "tunnel.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    ], body: '{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"check_urls":[{"name":"httpbin","url":"http://httpbin.org/ip","enabled":true},{"name":"baidu","url":"https://www.baidu.com/","enabled":true}],"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080,"username":"u","password":"p"}}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/providers \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_interval_s":60,"check_urls":[{"name":"httpbin","url":"http://httpbin.org/ip","enabled":true}],"tunnel":{"scheme":"http","gateway":"tunnel.proxy.example.com","port":8080}}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers",\n    json={"name": "my-tunnel-01", "type": "tunnel", "enabled": True, "check_interval_s": 60, "check_urls": [{"name": "httpbin", "url": "http://httpbin.org/ip", "enabled": True}], "tunnel": {"scheme": "http", "gateway": "tunnel.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
@@ -2071,11 +2186,12 @@ const APIDOC_ENDPOINTS = [
       { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
       { name: 'enabled', type: 'boolean', req: false, desc: '是否启用', in: 'body' },
       { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
+      { name: 'check_urls', type: 'array<object>', req: false, desc: '测试 URL 列表 [{name,url,enabled}]，覆盖原有测试 URL', in: 'body' },
       { name: 'tunnel', type: 'object', req: false, desc: 'tunnel 类型配置：scheme / gateway / port / username / password', in: 'body' },
     ],
-    body: '{"type":"tunnel","enabled":true,"check_interval_s":30,"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}',
-    curl: 'curl -X PUT "{HOST}/api/v1/admin/providers/my-tunnel-01" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"type":"tunnel","enabled":true,"check_interval_s":30,"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}\'',
-    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/providers/my-tunnel-01",\n    json={"type": "tunnel", "enabled": True, "check_interval_s": 30, "tunnel": {"scheme": "http", "gateway": "tunnel2.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    body: '{"type":"tunnel","enabled":true,"check_interval_s":30,"check_urls":[{"name":"baidu","url":"https://www.baidu.com/","enabled":true}],"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}',
+    curl: 'curl -X PUT "{HOST}/api/v1/admin/providers/my-tunnel-01" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"type":"tunnel","enabled":true,"check_interval_s":30,"check_urls":[{"name":"baidu","url":"https://www.baidu.com/","enabled":true}],"tunnel":{"scheme":"http","gateway":"tunnel2.proxy.example.com","port":8080}}\'',
+    py: 'import requests\n\nr = requests.put(\n    "{HOST}/api/v1/admin/providers/my-tunnel-01",\n    json={"type": "tunnel", "enabled": True, "check_interval_s": 30, "check_urls": [{"name": "baidu", "url": "https://www.baidu.com/", "enabled": True}], "tunnel": {"scheme": "http", "gateway": "tunnel2.proxy.example.com", "port": 8080}},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
