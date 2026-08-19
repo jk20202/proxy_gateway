@@ -326,16 +326,20 @@ func applyDefaults(cfg *Config) {
 }
 
 // defaultCheckURLs returns the 5 built-in default health-check targets used
-// when health_check.check_urls is not configured. All are enabled by default;
-// they can be overridden in yaml or per-provider in the web console.
+// when health_check.check_urls is not configured. These are lightweight IP
+// echo / country-code endpoints that return very little data (a few bytes),
+// keeping proxy traffic usage minimal. ip-api.com also reports the country
+// code of the proxy's exit IP, letting the checker refresh a proxy's country
+// for free. All are enabled by default; they can be overridden in yaml or
+// per-provider in the web console.
 func defaultCheckURLs() []CheckURLItem {
 	t := true
 	return []CheckURLItem{
-		{Name: "gstatic", URL: "http://www.gstatic.com/generate_204", Enabled: &t},
-		{Name: "google", URL: "https://www.google.com/generate_204", Enabled: &t},
-		{Name: "baidu", URL: "https://www.baidu.com/", Enabled: &t},
-		{Name: "httpbin", URL: "http://httpbin.org/ip", Enabled: &t},
-		{Name: "cloudflare", URL: "https://www.cloudflare.com/", Enabled: &t},
+		{Name: "ipapi-cc", URL: "http://ip-api.com/line/?fields=countryCode", Enabled: &t},
+		{Name: "ipapi-json", URL: "http://ip-api.com/json/?fields=countryCode,query", Enabled: &t},
+		{Name: "ipify", URL: "https://api.ipify.org", Enabled: &t},
+		{Name: "ipsb", URL: "https://ip.sb", Enabled: &t},
+		{Name: "icanhazip", URL: "https://icanhazip.com", Enabled: &t},
 	}
 }
 

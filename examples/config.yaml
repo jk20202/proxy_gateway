@@ -9,12 +9,12 @@ health_check:
   timeout_ms: 6000           # 需测出免费代理 5s 内的真实延迟
   concurrency: 256           # 免费代理量级大，并发调高避免检测积压
   check_url: "http://httpbin.org/ip"   # 单 URL 兜底（无 check_urls 时用）
-  check_urls:                          # 5 个固定默认测试 URL，默认全部启用；可在新增 Provider 时取消勾选或自定义新增
-    - { name: "gstatic",   url: "http://www.gstatic.com/generate_204", enabled: true }
-    - { name: "google",    url: "https://www.google.com/generate_204", enabled: true }
-    - { name: "baidu",     url: "https://www.baidu.com/",              enabled: true }
-    - { name: "httpbin",   url: "http://httpbin.org/ip",               enabled: true }
-    - { name: "cloudflare", url: "https://www.cloudflare.com/",         enabled: true }
+  check_urls:                          # 5 个固定默认测试 URL（轻量 IP 检测服务，返回数据极少，省代理流量），默认全部启用；可在新增 Provider 时取消勾选或自定义新增
+    - { name: "ipapi-cc",   url: "http://ip-api.com/line/?fields=countryCode",           enabled: true }
+    - { name: "ipapi-json", url: "http://ip-api.com/json/?fields=countryCode,query",     enabled: true }
+    - { name: "ipify",      url: "https://api.ipify.org",                                enabled: true }
+    - { name: "ipsb",       url: "https://ip.sb",                                        enabled: true }
+    - { name: "icanhazip",  url: "https://icanhazip.com",                                enabled: true }
   max_fails: 3
   rebuild_interval_ms: 200
 

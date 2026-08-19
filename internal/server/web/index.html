@@ -2151,7 +2151,7 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/providers',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/providers", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ],\n  "default_check_urls": [\n    {"name": "gstatic", "url": "http://www.gstatic.com/generate_204", "enabled": true}\n  ]\n}',
+    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ],\n  "default_check_urls": [\n    {"name": "ipapi-cc", "url": "http://ip-api.com/line/?fields=countryCode", "enabled": true}\n  ]\n}',
     resp_fields: [
       { name: 'providers', type: 'array<object>', desc: 'Provider 列表' },
       { name: 'providers[].name', type: 'string', desc: 'Provider 名称' },

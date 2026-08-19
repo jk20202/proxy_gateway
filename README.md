@@ -238,14 +238,17 @@ health_check:
   timeout_ms: 6000     # 单次探测超时（需测出免费代理 3s 内的真实延迟）
   concurrency: 256     # 并发探测数（免费代理量级大，建议调高）
   check_url: "http://httpbin.org/ip"   # 单 URL 兜底（未配置 check_urls 且 provider 未指定时使用）
-  # 5 个固定默认测试 URL：新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；
-  # 也可在新增/编辑 Provider 时自定义新增多个测试 URL。任一启用的 URL 可达即判定该代理存活。
+  # 5 个固定默认测试 URL（均为轻量 IP 检测服务，响应仅几字节，尽量少占用代理流量）：
+  # 新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；也可自定义新增多个测试 URL。
+  # 任一启用的 URL 可达即判定该代理存活。其中 ip-api.com 会返回代理出口 IP 的国家代码，
+  # 检测存活的同时顺带刷新代理国家；若检测网站不返回国家（如纯 IP 端点），则保留该代理
+  # 上一轮已测出的国家，避免用空值覆盖。
   check_urls:
-    - { name: "gstatic",    url: "http://www.gstatic.com/generate_204", enabled: true }
-    - { name: "google",     url: "https://www.google.com/generate_204", enabled: true }
-    - { name: "baidu",      url: "https://www.baidu.com/",              enabled: true }
-    - { name: "httpbin",    url: "http://httpbin.org/ip",               enabled: true }
-    - { name: "cloudflare", url: "https://www.cloudflare.com/",         enabled: true }
+    - { name: "ipapi-cc",   url: "http://ip-api.com/line/?fields=countryCode",           enabled: true }
+    - { name: "ipapi-json", url: "http://ip-api.com/json/?fields=countryCode,query",     enabled: true }
+    - { name: "ipify",      url: "https://api.ipify.org",                                enabled: true }
+    - { name: "ipsb",       url: "https://ip.sb",                                        enabled: true }
+    - { name: "icanhazip",  url: "https://icanhazip.com",                                enabled: true }
   max_fails: 3          # 连续失败次数，达到后移出可用池（免费代理一次失败即删）
   rebuild_interval_ms: 200
 

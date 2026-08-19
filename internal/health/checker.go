@@ -1,12 +1,16 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -152,10 +156,15 @@ func (c *Checker) checkOne(ctx context.Context, pr *model.Proxy) {
 		return
 	}
 	start := time.Now()
-	ok := c.probe(ctx, pr, checkURLs)
+	ok, country := c.probe(ctx, pr, checkURLs)
 	latency := time.Since(start)
 
 	if ok {
+		if country != "" && !isAlpha2(pr.Country) {
+			// 从 IP-echo 端点检测到代理出口 IP 的国家代码，顺带刷新。
+			// 未检测到国家（country==""）时保留已有国家，避免用空值覆盖上一轮结果。
+			c.pool.SetCountry(pr.ID, country)
+		}
 		c.pool.MarkSuccess(pr.ID, latency.Milliseconds())
 		if pr.Free && latency.Milliseconds() > deleteThreshold(pr) {
 			// 免费代理延迟超过阈值：直接删除，不做轮换保留
@@ -211,12 +220,14 @@ func deleteThreshold(pr *model.Proxy) int64 {
 	return 3000
 }
 
-// probe reports whether the proxy can reach ANY of the given check URLs. All
-// URLs are probed in parallel sharing one client; the first success cancels
-// the remaining in-flight probes.
-func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string) bool {
+// probe reports whether the proxy can reach ANY of the given check URLs and,
+// when the successful response carries a country code (e.g. from an IP-echo
+// endpoint), the detected country of the proxy's exit IP. All URLs are probed
+// in parallel sharing one client; the first success cancels the remaining
+// in-flight probes.
+func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string) (bool, string) {
 	if len(checkURLs) == 0 {
-		return false
+		return false, ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -251,43 +262,112 @@ func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string
 		},
 	}
 
-	result := make(chan bool, len(checkURLs))
+	type probeResult struct {
+		ok      bool
+		country string
+	}
+	result := make(chan probeResult, len(checkURLs))
 	var wg sync.WaitGroup
 	for _, checkURL := range checkURLs {
 		checkURL := checkURL
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if c.probeOne(ctx, client, checkURL) {
+			ok, country := c.probeOne(ctx, client, checkURL)
+			if ok {
 				select {
-				case result <- true:
-					cancel() // stop remaining probes
+				case result <- probeResult{ok: true, country: country}:
+					if country != "" {
+						cancel() // country already detected: stop remaining probes
+					}
 				default:
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	select {
-	case <-result:
-		return true
-	default:
-		return false
+	// Prefer a successful result that also detected a country so the proxy's
+	// country can be refreshed; otherwise any success is enough for liveness.
+	anyOK := false
+	country := ""
+	close(result)
+	for r := range result {
+		if !r.ok {
+			continue
+		}
+		anyOK = true
+		if country == "" && r.country != "" {
+			country = r.country
+		}
 	}
+	return anyOK, country
 }
 
-func (c *Checker) probeOne(ctx context.Context, client *http.Client, checkURL string) bool {
+func (c *Checker) probeOne(ctx context.Context, client *http.Client, checkURL string) (bool, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	req.Header.Set("User-Agent", "proxypool-health/1.0")
 	req.Header.Set("Connection", "close")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 400
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return false, ""
+	}
+	// Read a bounded amount of the body: IP-echo endpoints return only a few
+	// bytes (e.g. "HK" or a bare IP), so 1KB is more than enough to detect a
+	// country code without wasting the proxy's traffic.
+	body := make([]byte, 1024)
+	n, _ := io.ReadFull(resp.Body, body)
+	return true, parseCountry(body[:n])
+}
+
+// parseCountry extracts an ISO-3166 alpha-2 country code from a short response
+// body produced by common IP-echo / country endpoints. Recognized formats:
+//
+//	"HK"                         (ip-api.com/line?fields=countryCode)
+//	{"countryCode":"HK", ...}    (ip-api.com/json?fields=countryCode,query)
+//
+// Endpoints that return only a bare IP (api.ipify.org, ip.sb, icanhazip.com)
+// yield "" so the proxy's previously detected country is preserved.
+func parseCountry(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	// JSON: {"countryCode":"HK", ...}
+	if len(trimmed) > 2 && trimmed[0] == '{' {
+		var v struct {
+			CountryCode string `json:"countryCode"`
+		}
+		if err := json.Unmarshal(trimmed, &v); err == nil && v.CountryCode != "" {
+			if isAlpha2(v.CountryCode) {
+				return strings.ToUpper(v.CountryCode)
+			}
+		}
+		return ""
+	}
+	// Plain 2-letter code: "HK"
+	if isAlpha2(string(trimmed)) {
+		return strings.ToUpper(string(trimmed))
+	}
+	return ""
+}
+
+func isAlpha2(s string) bool {
+	if len(s) != 2 {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		c := s[i]
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
 }

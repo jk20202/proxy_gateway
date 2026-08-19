@@ -43,6 +43,7 @@ func fakeProxy(upstream string, fail *atomic.Bool) http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
 	}
 }
 
@@ -284,6 +285,111 @@ func TestCheckerFallsBackToGlobalDefaultCheckURLs(t *testing.T) {
 	c.checkAll(ctx)
 	if !pr.Alive.Load() {
 		t.Fatal("proxy should stay alive via global default check URLs")
+	}
+}
+
+func TestParseCountry(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"plain country code", "HK\n", "HK"},
+		{"plain country code no newline", "US", "US"},
+		{"json countryCode", `{"countryCode":"HK","query":"1.2.3.4"}` + "\n", "HK"},
+		{"json with other fields", `{"status":"success","country":"Hong Kong","countryCode":"HK","query":"1.2.3.4"}` + "\n", "HK"},
+		{"bare ip", "103.156.242.197", ""},
+		{"bare ip newline", "203.198.248.244\n", ""},
+		{"empty", "", ""},
+		{"json no countryCode", `{"query":"1.2.3.4"}`, ""},
+		{"lowercase code", "hk", "HK"},
+		{"too long", "HKG", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseCountry([]byte(c.body)); got != c.want {
+				t.Fatalf("parseCountry(%q) = %q, want %q", c.body, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCheckerDetectsCountryFromCheckURL(t *testing.T) {
+	// upstream that returns a country code (simulates ip-api.com/line)
+	cc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("HK"))
+	}))
+	defer cc.Close()
+
+	proxySrv := startProxyServer(fakeProxy(cc.URL, nil))
+	defer proxySrv.Close()
+	host, portStr := splitHostPort(proxySrv.URL[len("http://"):])
+
+	p := pool.NewPool()
+	pr := &model.Proxy{
+		ID:       "cc1",
+		Provider: "test",
+		Kind:     model.KindIPPool,
+		Scheme:   "http",
+		Host:     host,
+		Port:     atoi(portStr),
+		Weight:   1,
+		CheckURL: cc.URL,
+	}
+	pr.Alive.Store(true)
+	p.Add(pr)
+
+	cfg := config.HealthConfig{IntervalSeconds: 1, TimeoutMs: 2000, Concurrency: 8, MaxFails: 3}
+	c := NewChecker(cfg, p, newLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c.checkAll(ctx)
+	if !pr.Alive.Load() {
+		t.Fatal("proxy should be alive")
+	}
+	if pr.Country != "HK" {
+		t.Fatalf("country should be refreshed from check URL, got %q", pr.Country)
+	}
+}
+
+func TestCheckerKeepsCountryWhenNoCountryDetected(t *testing.T) {
+	// upstream returns only a bare IP (no country code)
+	ip := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("103.156.242.197"))
+	}))
+	defer ip.Close()
+
+	proxySrv := startProxyServer(fakeProxy(ip.URL, nil))
+	defer proxySrv.Close()
+	host, portStr := splitHostPort(proxySrv.URL[len("http://"):])
+
+	p := pool.NewPool()
+	pr := &model.Proxy{
+		ID:       "cc2",
+		Provider: "test",
+		Kind:     model.KindIPPool,
+		Scheme:   "http",
+		Host:     host,
+		Port:     atoi(portStr),
+		Weight:   1,
+		CheckURL: ip.URL,
+		Country:  "US", // previously detected country
+	}
+	pr.Alive.Store(true)
+	p.Add(pr)
+
+	cfg := config.HealthConfig{IntervalSeconds: 1, TimeoutMs: 2000, Concurrency: 8, MaxFails: 3}
+	c := NewChecker(cfg, p, newLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c.checkAll(ctx)
+	if !pr.Alive.Load() {
+		t.Fatal("proxy should be alive")
+	}
+	if pr.Country != "US" {
+		t.Fatalf("existing country should be preserved when check URL returns no country, got %q", pr.Country)
 	}
 }
 
