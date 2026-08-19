@@ -48,20 +48,6 @@ db:
 # username/password：网关凭证。配置后即可用 `curl -x 用户名:密码@域名:10000 <目标URL>` 直接经由本组代理转发请求，
 # 网关按凭证匹配分组并从该组实时取一个可用代理中转，组内主备池自动切换对客户端透明。
 groups:
-  - name: "residential"
-    type: "static"
-    min_alive_ratio: 0.5
-    username: "residential"       # 网关用户名（可选，不配则不可通过网关访问本组）
-    password: "residential-pass"
-    primary: ["mock-sticky", "mock-ippool"]
-    primary_weights:              # 主池中各 provider 的调度权重（已从 Provider 层迁移到分组层）
-      mock-sticky: 2              # 缺省 1；权重越大流量分配越多
-      mock-ippool: 1
-    backups:
-      - name: "fallback-tunnel"
-        min_alive_ratio: 0
-        providers: ["mock-tunnel"]
-
   # 免费代理分组：按"域名相关+free"命名，采集自公共免费源，延迟低于 3 秒的才收，
   # 每分钟检测一次，实测延迟超过 3 秒或不可用即删；无可用时同样支持备用池兜底。
   - name: "charlespikachu-free"
@@ -76,52 +62,6 @@ groups:
     #     providers: ["mock-tunnel"]
 
 providers:
-  # 隧道型代理：固定网关 + 认证，平台侧自动轮换出口 IP
-  # check_interval_s 为该 provider 的检测频率（池内 IP 多久检测一次延迟，0=用全局 health_check.interval_s）
-  - name: "mock-tunnel"
-    type: "tunnel"
-    enabled: true
-    min_alive_ratio: 0.1
-    check_interval_s: 60          # 检测频率：每 60s 检测一次延迟
-    check_url: "http://127.0.0.1:10002/"
-    country: "US"                 # 显式指定国家（海外），入池直接打标，跳过 IP 归属查询
-    tunnel:
-      scheme: "http"
-      gateway: "127.0.0.1"
-      port: 10001
-      username: ""
-      password: ""
-
-  # IP 池型代理：调用平台提取 API 拿到一批 IP:Port，作为兜底（低优先级）
-  - name: "mock-ippool"
-    type: "ip_pool"
-    enabled: false
-    min_alive_ratio: 0
-    check_interval_s: 60
-    check_url: "http://127.0.0.1:10002/"
-    country: "CN"                 # 国内
-    ip_pool:
-      extract_url: "http://127.0.0.1:10003/get"
-      format: "text"
-      refresh_interval_s: 30      # 提取频率：每 30s 从提取 API 拉一次新 IP
-      expire_after_s: 600
-      max_proxies: 100
-
-  # 长效静态 IP（粘性）：同客户端在 sticky_seconds 时效内固定同一 IP，到期后才轮换
-  - name: "mock-sticky"
-    type: "sticky"
-    enabled: true
-    sticky_seconds: 60       # 粘性时长：60=1分钟、300=5分钟，可任意设置
-    check_interval_s: 60
-    check_url: "http://127.0.0.1:10002/"
-    country: "HK"                 # 中国香港（也属海外）
-    ip_pool:
-      extract_url: "http://127.0.0.1:10003/get"
-      format: "text"
-      refresh_interval_s: 120     # 提取频率
-      expire_after_s: 3600
-      max_proxies: 100
-
   # 免费代理源：采集自公共免费源，只保留上报延迟低于 max_speed_ms 的 HTTP 代理。
   # 免费代理不可用即删（健康检测一次失败，或实测延迟超过 delete_latency_ms），不告警。
   # 不设上限、不过期：只要代理还能用、延迟达标就一直保留，按检测频率自动淘汰超标者。
