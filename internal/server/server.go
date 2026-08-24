@@ -261,6 +261,10 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 				s.handleUpdateProvider(ctx)
 				return
 			}
+			if method == "DELETE" {
+				s.handleRemoveProviderByName(ctx)
+				return
+			}
 			notFound(ctx)
 			return
 		}
@@ -643,6 +647,25 @@ func (s *Server) handleRemoveProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
+	if err := s.mgr.RemoveProvider(name); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleRemoveProviderByName deletes a provider referenced by its name in the
+// URL path (DELETE /api/v1/admin/providers/{name}), matching how the web
+// console calls the endpoint.
+func (s *Server) handleRemoveProviderByName(ctx *fasthttp.RequestCtx) {
+	rest := strings.TrimPrefix(string(ctx.Path()), "/api/v1/admin/providers/")
+	rest = strings.TrimSuffix(rest, "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "name required"})
+		return
+	}
+	name := parts[0]
 	if err := s.mgr.RemoveProvider(name); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
