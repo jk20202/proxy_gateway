@@ -29,6 +29,13 @@ import (
 // dialTimeout bounds connecting to the upstream proxy.
 const dialTimeout = 15 * time.Second
 
+// maxProxyAttempts bounds how many upstream proxies are tried per request
+// before giving up. Free proxy feeds contain a large share of dead or
+// misbehaving proxies (e.g. Squid pages returning ERR_INVALID_URL), so the
+// gateway retries with a fresh proxy instead of relaying the upstream error
+// page to the client.
+const maxProxyAttempts = 3
+
 // GroupSource returns the current group definitions. The gateway reads this
 // on every request so runtime group CRUD takes effect immediately.
 type GroupSource func() []config.GroupCfg
@@ -250,18 +257,45 @@ func (g *Gateway) pickProxy(group string) *model.Proxy {
 	return g.pool.NextInGroup(group)
 }
 
-// handleHTTP forwards a non-CONNECT request through the selected upstream.
+// handleHTTP forwards a non-CONNECT request through the selected upstream,
+// retrying with a fresh proxy when the chosen upstream is unusable.
 func (g *Gateway) handleHTTP(w http.ResponseWriter, r *http.Request, group string) {
-	pr := g.pickProxy(group)
-	if pr == nil {
-		g.noProxy(w, group)
-		return
+	excluded := map[string]struct{}{}
+	tried := 0
+	for attempt := 0; attempt < maxProxyAttempts; attempt++ {
+		pr := g.pool.NextInGroupExcluding(group, excluded)
+		if pr == nil {
+			// Every live proxy was tried and excluded: exhausted, not empty.
+			if tried > 0 {
+				http.Error(w, "all upstream proxies failed", http.StatusBadGateway)
+				return
+			}
+			g.noProxy(w, group)
+			return
+		}
+		excluded[pr.ID] = struct{}{}
+		tried++
+		done, retry := g.relayHTTP(w, r, group, pr)
+		if done {
+			return
+		}
+		if !retry {
+			return
+		}
+		g.logger.Warn("gateway retrying with next proxy", "group", group, "proxy", pr.ID, "attempt", attempt+1)
 	}
+	http.Error(w, "all upstream proxies failed", http.StatusBadGateway)
+}
+
+// relayHTTP attempts one hop via pr. It returns (done, retry): done means the
+// response was fully handled (either relayed or an error was written); retry
+// reports whether the upstream was unusable and a different proxy should be
+// tried.
+func (g *Gateway) relayHTTP(w http.ResponseWriter, r *http.Request, group string, pr *model.Proxy) (done, retry bool) {
 	upstream, err := g.dialUpstream(pr, r.URL)
 	if err != nil {
-		g.logger.Warn("gateway upstream dial failed", "group", group, "err", err)
-		http.Error(w, "upstream proxy unreachable", http.StatusBadGateway)
-		return
+		g.logger.Warn("gateway upstream dial failed", "group", group, "proxy", pr.ID, "err", err)
+		return false, true
 	}
 	defer upstream.Close()
 
@@ -273,33 +307,86 @@ func (g *Gateway) handleHTTP(w http.ResponseWriter, r *http.Request, group strin
 	out.Header.Del("Proxy-Connection")
 
 	if err := out.Write(upstream); err != nil {
-		g.logger.Warn("gateway forward failed", "group", group, "err", err)
-		return
+		g.logger.Warn("gateway forward failed", "group", group, "proxy", pr.ID, "err", err)
+		return false, true
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upstream), out)
 	if err != nil {
-		g.logger.Warn("gateway read response failed", "group", group, "err", err)
-		http.Error(w, "upstream proxy error", http.StatusBadGateway)
-		return
+		g.logger.Warn("gateway read response failed", "group", group, "proxy", pr.ID, "err", err)
+		return false, true
 	}
 	defer resp.Body.Close()
+	// An upstream proxy error page (e.g. Squid ERR_INVALID_URL) is not the
+	// target's own response: treat it as a failed hop and try another proxy.
+	if isUpstreamErrorPage(resp) {
+		g.logger.Warn("gateway upstream error page", "group", group, "proxy", pr.ID, "status", resp.StatusCode)
+		return false, true
+	}
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+	return true, false
 }
 
-// handleConnect opens a CONNECT tunnel through the selected upstream.
-func (g *Gateway) handleConnect(w http.ResponseWriter, r *http.Request, group string) {
-	pr := g.pickProxy(group)
-	if pr == nil {
-		g.noProxy(w, group)
-		return
+// isUpstreamErrorPage reports whether an upstream response looks like a proxy
+// error page rather than the target's own response. Squid (and similar) emits
+// an HTML error body with Server: squid and a 4xx/5xx status when it cannot
+// parse or fetch the requested URL.
+func isUpstreamErrorPage(resp *http.Response) bool {
+	if resp.StatusCode < 400 {
+		return false
 	}
+	srv := strings.ToLower(resp.Header.Get("Server"))
+	if strings.Contains(srv, "squid") {
+		return true
+	}
+	// Some misbehaving proxies omit Server but still serve a proxy error page.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	low := strings.ToLower(string(body))
+	if strings.Contains(low, "the requested url could not be retrieved") ||
+		strings.Contains(low, "<title>error") {
+		return true
+	}
+	return false
+}
+
+// handleConnect opens a CONNECT tunnel through the selected upstream,
+// retrying with a fresh proxy when the chosen upstream refuses the tunnel.
+func (g *Gateway) handleConnect(w http.ResponseWriter, r *http.Request, group string) {
+	excluded := map[string]struct{}{}
+	tried := 0
+	for attempt := 0; attempt < maxProxyAttempts; attempt++ {
+		pr := g.pool.NextInGroupExcluding(group, excluded)
+		if pr == nil {
+			if tried > 0 {
+				http.Error(w, "all upstream proxies failed", http.StatusBadGateway)
+				return
+			}
+			g.noProxy(w, group)
+			return
+		}
+		excluded[pr.ID] = struct{}{}
+		tried++
+		done, retry := g.relayConnect(w, r, group, pr)
+		if done {
+			return
+		}
+		if !retry {
+			return
+		}
+		g.logger.Warn("gateway connect retrying with next proxy", "group", group, "proxy", pr.ID, "attempt", attempt+1)
+	}
+	http.Error(w, "all upstream proxies failed", http.StatusBadGateway)
+}
+
+// relayConnect attempts one CONNECT tunnel via pr. done means the tunnel was
+// established or a terminal error was written; retry reports the upstream
+// refused the CONNECT and another proxy should be tried.
+func (g *Gateway) relayConnect(w http.ResponseWriter, r *http.Request, group string, pr *model.Proxy) (done, retry bool) {
 	upstream, err := dialTCP(pr, dialTimeout)
 	if err != nil {
-		g.logger.Warn("gateway connect dial failed", "group", group, "err", err)
-		http.Error(w, "upstream proxy unreachable", http.StatusBadGateway)
-		return
+		g.logger.Warn("gateway connect dial failed", "group", group, "proxy", pr.ID, "err", err)
+		return false, true
 	}
 	defer upstream.Close()
 
@@ -314,36 +401,34 @@ func (g *Gateway) handleConnect(w http.ResponseWriter, r *http.Request, group st
 	}
 	if err := req.Write(upstream); err != nil {
 		http.Error(w, "upstream connect failed", http.StatusBadGateway)
-		return
+		return true, false
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upstream), req)
 	if err != nil {
-		g.logger.Warn("gateway connect response failed", "group", group, "err", err)
-		http.Error(w, "upstream connect failed", http.StatusBadGateway)
-		return
+		g.logger.Warn("gateway connect response failed", "group", group, "proxy", pr.ID, "err", err)
+		return false, true
 	}
 	if resp.StatusCode != http.StatusOK {
-		g.logger.Warn("gateway connect rejected", "group", group, "status", resp.StatusCode)
-		http.Error(w, "upstream connect rejected", http.StatusBadGateway)
-		return
+		g.logger.Warn("gateway connect rejected", "group", group, "proxy", pr.ID, "status", resp.StatusCode)
+		return false, true
 	}
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-		return
+		return true, false
 	}
 	client, rw, err := hj.Hijack()
 	if err != nil {
 		http.Error(w, "hijack failed", http.StatusInternalServerError)
-		return
+		return true, false
 	}
 	defer client.Close()
 	if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		return
+		return true, false
 	}
 	if err := rw.Flush(); err != nil {
-		return
+		return true, false
 	}
 	// Bidirectional copy: client <-> upstream tunnel.
 	go func() {
@@ -351,6 +436,7 @@ func (g *Gateway) handleConnect(w http.ResponseWriter, r *http.Request, group st
 		_ = upstream.Close()
 	}()
 	_, _ = io.Copy(client, upstream)
+	return true, false
 }
 
 // ForwardPlain proxies a plain HTTP GET to target through a live proxy from

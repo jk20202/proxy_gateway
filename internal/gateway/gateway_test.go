@@ -48,6 +48,14 @@ func addProxy(p *pool.Pool, host string, port int) {
 	p.Add(pr)
 }
 
+// addProxyID adds a live proxy with an explicit unique ID (used when a test
+// needs multiple upstreams on the same host).
+func addProxyID(p *pool.Pool, id string, host string, port int) {
+	pr := &model.Proxy{ID: id, Provider: "p1", Kind: model.KindIPPool, Scheme: "http", Host: host, Port: port}
+	pr.Alive.Store(true)
+	p.Add(pr)
+}
+
 func groups() []config.GroupCfg {
 	return []config.GroupCfg{
 		{Name: "g1", Type: "static", Primary: []string{"p1"}, Username: "user1", Password: "pass1"},
@@ -134,6 +142,83 @@ func TestAuthOKNoProxy(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+// squidErrorProxy is a fake upstream that answers every request with a Squid
+// ERR_INVALID_URL error page, mimicking misbehaving free proxies.
+func squidErrorProxy(t *testing.T) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "squid/4.15")
+		w.Header().Set("Content-Type", "text/html;charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, "<!DOCTYPE html><html><head><title>ERROR: The requested URL could not be retrieved</title></head><body id=ERR_INVALID_URL></body></html>")
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func TestHTTPForwardSkipsSquidErrorPage(t *testing.T) {
+	// First-added proxy is the broken Squid one; the good upstream must be
+	// tried next thanks to the gateway's retry logic.
+	bad := squidErrorProxy(t)
+	badHost, badPort := hostPort(t, bad.Listener.Addr())
+	target := fakeTarget(t)
+	good := fakeUpstream(t, target.URL)
+	goodHost, goodPort := hostPort(t, good.Listener.Addr())
+
+	p := pool.NewPool()
+	p.SetGroups(groups())
+	addProxyID(p, "bad", badHost, badPort)
+	addProxyID(p, "good", goodHost, goodPort)
+	g := newTestGateway(p, groups)
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/hello", nil)
+	req.Header.Set("Proxy-Authorization", basicAuthHeader("user1", "pass1"))
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("want 307 redirect from good upstream, got %d body=%s", resp.StatusCode, body)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasSuffix(loc, "/hello") {
+		t.Fatalf("unexpected Location %q", loc)
+	}
+}
+
+func TestHTTPForwardAllUpstreamsFail(t *testing.T) {
+	bad1 := squidErrorProxy(t)
+	h1, p1 := hostPort(t, bad1.Listener.Addr())
+	bad2 := squidErrorProxy(t)
+	h2, p2 := hostPort(t, bad2.Listener.Addr())
+
+	p := pool.NewPool()
+	p.SetGroups(groups())
+	addProxyID(p, "bad1", h1, p1)
+	addProxyID(p, "bad2", h2, p2)
+	g := newTestGateway(p, groups)
+	srv := httptest.NewServer(g)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/hello", nil)
+	req.Header.Set("Proxy-Authorization", basicAuthHeader("user1", "pass1"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("want 502 after exhausting bad proxies, got %d", resp.StatusCode)
 	}
 }
 
