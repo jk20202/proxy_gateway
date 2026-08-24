@@ -1,5 +1,5 @@
 server:
-  listen: ":8080"
+  listen: ":10002"              # Web 管理控制台 / 消费 API 端口
   read_timeout_ms: 3000
   write_timeout_ms: 3000
   max_workers: 8192
