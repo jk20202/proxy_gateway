@@ -41,6 +41,17 @@ body {
 .header .stats { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
 .header .stats b { color: var(--text); font-size: 15px; }
 .actions { display: flex; gap: 8px; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.user-box { display: flex; align-items: center; gap: 8px; }
+.user-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--blue); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+}
+.user-meta { display: flex; flex-direction: column; line-height: 1.2; }
+.user-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.user-role { font-size: 11px; color: var(--muted); }
 .btn {
   background: var(--panel2);
   border: 1px solid var(--border);
@@ -313,19 +324,25 @@ tr.dead-row td { opacity: .5; }
 </style>
 </head>
 <body>
-<div class="header">
-  <h1><span class="dot"></span> Proxy Pool 管理控制台</h1>
-  <div class="stats">
-    <span>总代理 <b id="stat-total">-</b></span>
-    <span>存活 <b id="stat-alive">-</b></span>
-    <span>Provider <b id="stat-providers">-</b></span>
-    <span>API <b id="stat-api" class="green">-</b></span>
+  <div class="header">
+    <h1><span class="dot"></span> Proxy Pool 管理控制台</h1>
+    <div class="stats">
+      <span>总代理 <b id="stat-total">-</b></span>
+      <span>存活 <b id="stat-alive">-</b></span>
+      <span>Provider <b id="stat-providers">-</b></span>
+      <span>API <b id="stat-api" class="green">-</b></span>
+    </div>
+    <div class="header-right">
+      <div class="user-box">
+        <span class="user-avatar" id="user-avatar">A</span>
+        <div class="user-meta">
+          <span class="user-name" id="user-name">-</span>
+          <span class="user-role" id="user-role">-</span>
+        </div>
+      </div>
+      <button class="btn" onclick="logout()">退出登录</button>
+    </div>
   </div>
-  <div class="actions">
-    <button class="btn" onclick="runHealthCheck()">立即健康检查</button>
-    <button class="btn btn-primary" onclick="openAddProvider()">+ 添加 Provider</button>
-  </div>
-</div>
 
 <main>
   <div class="metrics">
@@ -348,7 +365,13 @@ tr.dead-row td { opacity: .5; }
 
   <div class="view active" id="view-providers">
     <div class="card">
-      <h2>代理平台（Provider）列表 <span class="refresh-hint">自动刷新中</span></h2>
+      <h2 style="display:flex;align-items:center;justify-content:space-between;">
+        <span>代理平台（Provider）列表 <span class="refresh-hint">自动刷新中</span></span>
+        <span style="display:flex;gap:8px;">
+          <button class="btn" onclick="runHealthCheck()">立即健康检查</button>
+          <button class="btn btn-primary" onclick="openAddProvider()">+ 添加 Provider</button>
+        </span>
+      </h2>
       <table>
         <thead>
           <tr>
@@ -816,6 +839,7 @@ async function initAuth() {
   if (token) {
     try {
       currentMe = await api('/api/v1/auth/me', { method: 'GET' });
+      renderUserBox();
       return true;
     } catch (e) {
       if (!e.unauthorized) return true; // auth disabled
@@ -830,10 +854,28 @@ async function initAuth() {
     } else if (r.ok) {
       const me = await r.json();
       currentMe = me;
+      renderUserBox();
       return true;
     }
   } catch (e) { /* network issue: ignore */ }
   return false;
+}
+
+function renderUserBox() {
+  const name = (currentMe && currentMe.name) || '';
+  const role = (currentMe && currentMe.role) || '';
+  const admin = !!(currentMe && currentMe.admin);
+  const avatar = name ? name.charAt(0).toUpperCase() : 'A';
+  document.getElementById('user-avatar').textContent = avatar;
+  document.getElementById('user-name').textContent = name || '未登录';
+  document.getElementById('user-role').textContent = admin ? '管理员' : (role || '用户');
+}
+
+function logout() {
+  token = '';
+  currentMe = null;
+  localStorage.removeItem('pp_token');
+  location.href = '/login';
 }
 
 function toast(msg, isError = false) {
@@ -879,7 +921,7 @@ async function loadProviders() {
 function renderProviders() {
   const tb = document.getElementById('provider-tbody');
   if (!state.providers.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击右上角「添加 Provider」</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击上方「添加 Provider」</td></tr>';
     return;
   }
   // Stable order regardless of API response order: enabled first, grouped by
