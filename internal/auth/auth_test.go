@@ -187,6 +187,34 @@ func TestUpdateAccount(t *testing.T) {
 	}
 }
 
+func TestUpdateAccountRename(t *testing.T) {
+	m := New(testAccts())
+	// rename alice -> alicia
+	err := m.UpdateAccount("alice", config.AccountCfg{Name: "alicia", Role: "admin", Enabled: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := m.ByToken("alicetok"); !ok {
+		t.Fatal("token should still resolve after rename")
+	}
+	if acct, _ := m.ByToken("alicetok"); acct.Name != "alicia" {
+		t.Fatalf("expected renamed account alicia, got %s", acct.Name)
+	}
+	if _, ok := m.ByToken("alicetok"); !ok {
+		t.Fatal("old name token lookup failed")
+	}
+	if _, ok := m.byName["alicia"]; !ok {
+		t.Fatal("renamed account should be reachable by new name")
+	}
+	if _, ok := m.byName["alice"]; ok {
+		t.Fatal("old name should no longer resolve")
+	}
+	// rename into an existing name must fail
+	if err := m.UpdateAccount("alicia", config.AccountCfg{Name: "bob", Enabled: true}); err == nil {
+		t.Fatal("expected error renaming into existing account name")
+	}
+}
+
 func TestListOmitsPasswords(t *testing.T) {
 	m := New(testAccts())
 	for _, a := range m.List() {

@@ -193,7 +193,8 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 // UpdateAccount applies a partial update to an existing account. The token is
 // regenerated automatically when an empty token is provided. Password is kept
 // unchanged when empty, and Groups is kept unchanged when nil (empty slice
-// clears the group restriction).
+// clears the group restriction). When c.Name differs from name the account is
+// renamed, so callers can edit the account name in-place.
 func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -221,11 +222,29 @@ func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 		acct.Token = c.Token
 		m.byToken[c.Token] = acct
 	}
+	// Rename support: when the request carries a different non-empty name,
+	// update the account's name and all index mappings.
+	newName := strings.TrimSpace(c.Name)
+	if newName != "" && newName != name {
+		if m.byName[newName] != nil {
+			return &ConfigError{"account name already exists"}
+		}
+		delete(m.byName, name)
+		acct.Name = newName
+		m.byName[newName] = acct
+	}
 	if m.persist != nil {
-		return m.persist.SaveAccount(config.AccountCfg{
+		// Persist under the (possibly renamed) key. For a rename the new row
+		// is upserted and the old name is removed so no stale row remains.
+		if err := m.persist.SaveAccount(config.AccountCfg{
 			Name: acct.Name, Password: acct.Password, Token: acct.Token,
 			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
-		})
+		}); err != nil {
+			return err
+		}
+		if newName != "" && newName != name {
+			return m.persist.DeleteAccount(name)
+		}
 	}
 	return nil
 }
