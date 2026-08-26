@@ -245,17 +245,16 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		}
 
 		if strings.HasPrefix(path, "/api/v1/admin/") {
-			// Provider / group / proxy management is available to any
-			// authenticated account; ownership checks inside each handler
-			// restrict what a non-admin may read or mutate. Everything else
-			// under /admin (accounts, usage, alerts, health) stays admin-only.
+			// Provider / group management is available to any authenticated
+			// account; ownership checks inside each handler restrict what a
+			// non-admin may read or mutate. The proxy list stays admin-only
+			// because it exposes every proxy IP and credential, which must not
+			// leak to regular users.
 			adminOnly := true
 			switch {
 			case strings.HasPrefix(path, "/api/v1/admin/providers"):
 				adminOnly = false
 			case strings.HasPrefix(path, "/api/v1/admin/groups"):
-				adminOnly = false
-			case strings.HasPrefix(path, "/api/v1/admin/proxies"):
 				adminOnly = false
 			}
 			if !s.authorize(ctx, adminOnly) {
@@ -745,17 +744,52 @@ func (s *Server) providerStats() map[string]any {
 
 func (s *Server) handleListProviders(ctx *fasthttp.RequestCtx) {
 	all := s.mgr.ProviderList()
-	visible := all[:0]
+	visible := make([]pool.ProviderInfo, 0, len(all))
 	for _, p := range all {
-		if s.providerVisible(ctx, p.Config) {
-			visible = append(visible, p)
+		if !s.providerVisible(ctx, p.Config) {
+			continue
 		}
+		// Non-owners of a shared provider must not see its secret configuration
+		// (extract/tunnel URLs, IP endpoints, credentials). They may only use
+		// the live proxies and see operational stats.
+		if !s.providerCanSeeFullConfig(ctx, p.Config) {
+			p = sanitizeProviderInfo(p)
+		}
+		visible = append(visible, p)
 	}
 	resp := map[string]any{"providers": visible}
 	if s.checker != nil {
 		resp["default_check_urls"] = s.checker.DefaultCheckURLs()
 	}
 	writeJSON(ctx, fasthttp.StatusOK, resp)
+}
+
+// providerCanSeeFullConfig reports whether the requesting account is allowed to
+// view the secret configuration (URLs / credentials) of a provider. Admins and
+// the owner always can; everyone else cannot (even for shared providers).
+func (s *Server) providerCanSeeFullConfig(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
+	if s.isAdminUser(ctx) {
+		return true
+	}
+	acct := currentAccount(ctx)
+	if acct == "" {
+		return true
+	}
+	return cfg.Owner == acct
+}
+
+// sanitizeProviderInfo strips all secret configuration fields from a provider
+// so a non-owner can see only the name, type, health and sharing metadata.
+func sanitizeProviderInfo(p pool.ProviderInfo) pool.ProviderInfo {
+	cfg := p.Config
+	cfg.Tunnel = nil
+	cfg.IPPool = nil
+	cfg.Free = nil
+	cfg.CheckURL = ""
+	cfg.CheckURLs = nil
+	cfg.Country = ""
+	p.Config = cfg
+	return p
 }
 
 // providerAccessDenied writes a uniform 403 response.

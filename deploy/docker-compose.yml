@@ -5,8 +5,8 @@
 # 清空数据（慎用）：docker compose down -v
 #
 # 对外端口：
-#   10000 代理网关（curl -x 用户:密码@主机:10000）
-#   10002 Web 管理控制台 / 消费 API
+#   10000 Web 管理控制台 / 消费 API
+#   20000 代理网关（curl -x 用户:密码@主机:20000）
 #
 # 修改配置：
 #   - 应用配置：编辑本目录 config.docker.yaml，然后 docker compose restart proxy-pool
@@ -72,7 +72,7 @@ services:
         condition: service_healthy
     ports:
       - "10000:10000"
-      - "10002:10002"
+      - "20000:20000"
     volumes:
       - ./config.docker.yaml:/app/config.yaml:ro
       - usage_data:/app/data

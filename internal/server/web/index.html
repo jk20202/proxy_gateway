@@ -413,7 +413,7 @@ tr.dead-row td { opacity: .5; }
   <div class="view" id="view-groups">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-        <h2 style="margin:0;">调度分组 <span class="refresh-hint">主池存活率跌破阈值时自动切备用池；配置网关用户名/密码后，直接使用 用户名:密码@域名:10000 作为代理地址</span></h2>
+        <h2 style="margin:0;">调度分组 <span class="refresh-hint">主池存活率跌破阈值时自动切备用池；配置网关用户名/密码后，直接使用 用户名:密码@域名:20000 作为代理地址</span></h2>
         <button class="btn btn-primary" onclick="openGroupModal()">新增分组</button>
       </div>
       <div id="groups-container"><div class="empty">加载中...</div></div>
@@ -703,7 +703,7 @@ tr.dead-row td { opacity: .5; }
       </div>
       <div class="gs-row" style="margin-top:12px;">
         <div class="gs-field">
-          <label>网关用户名（配置后使用 用户名:密码@域名:10000）</label>
+          <label>网关用户名（配置后使用 用户名:密码@域名:20000）</label>
           <input id="g-username" placeholder="可空">
         </div>
         <div class="gs-field">
@@ -926,8 +926,39 @@ async function loadProviders() {
   } catch (e) { toast('加载 Provider 失败: ' + e.message, true); }
 }
 
+// ---- 本地隐藏共享 Provider ----
+// A non-owner may hide a shared provider from their own console without
+// affecting the owner or other users; this is stored locally only.
+function hiddenProviders() {
+  try { return JSON.parse(localStorage.getItem('pp_hidden_providers') || '[]'); }
+  catch (e) { return []; }
+}
+function saveHiddenProviders(list) {
+  localStorage.setItem('pp_hidden_providers', JSON.stringify(list));
+}
+function hideProvider(name) {
+  const list = hiddenProviders();
+  if (!list.includes(name)) { list.push(name); saveHiddenProviders(list); }
+  renderProviders();
+  toast('已从你的列表隐藏「' + name + '」（不影响创建者）');
+}
+function unhideProvider(name) {
+  saveHiddenProviders(hiddenProviders().filter(n => n !== name));
+  renderProviders();
+}
+function showProviderUsage(name) {
+  const s = state.providers.find(x => x.name === name);
+  if (!s) return;
+  const usage = `取代理接口（需你的账户 Token）：
+GET /api/v1/proxy?group=<你的分组>
+或直接走该分组网关：
+curl -x <网关用户名>:<网关密码>@<域名>:20000 <目标URL>`;
+  alert(usage);
+}
+
 function renderProviders() {
   const tb = document.getElementById('provider-tbody');
+  const hidden = hiddenProviders();
   if (!state.providers.length) {
     tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击上方「添加 Provider」</td></tr>';
     return;
@@ -941,23 +972,49 @@ function renderProviders() {
     if ((a.type || '') !== (b.type || '')) return (a.type || '').localeCompare(b.type || '');
     return (a.name || '').localeCompare(b.name || '');
   });
-  tb.innerHTML = ordered.map(p => {
+  const rows = [];
+  ordered.forEach(p => {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
-    const isOwn = isAdmin() || owner === me || owner === '';
+    const isOwn = admin || owner === me || owner === '';
     const publicShared = isGlobal || !!(p.config?.public);
+    const canSeeFull = isOwn;
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
     const shareTag = publicShared
-      ? '<span class="badge on" style="margin-left:4px;" title="已公开共享">公开</span>'
+      ? '<span class="badge on" style="margin-left:4px;" title="已公开共享给其他用户">公开</span>'
       : '<span class="badge" style="margin-left:4px;background:var(--bg);color:var(--muted);border:1px solid var(--border);" title="仅自己可见">私有</span>';
-    const ops = isOwn
-      ? `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
+
+    if (hidden.includes(p.name)) {
+      rows.push(`<tr>
+        <td class="mono"><b>${esc(p.name)}</b>${ownerTag}${shareTag}</td>
+        <td colspan="6" style="color:var(--muted);font-size:12px;">已从你的列表隐藏</td>
+        <td><button class="btn btn-sm" data-name="${esc(p.name)}" onclick="unhideProvider(this.dataset.name)">恢复显示</button></td>
+      </tr>`);
+      return;
+    }
+
+    let ops;
+    if (isOwn) {
+      ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
         <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
-        <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>`
-      : `<span style="color:var(--muted);font-size:12px;">仅管理人可操作</span>`;
-    return `
+        <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>`;
+    } else {
+      ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="showProviderUsage(this.dataset.name)">使用</button>
+        <button class="btn btn-sm" data-name="${esc(p.name)}" onclick="hideProvider(this.dataset.name)">隐藏</button>`;
+    }
+
+    const detailMeta = canSeeFull
+      ? `${p.provider_type === 'free'
+          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">采集 ${((p.config?.free?.refresh_interval_s) || 0)}s · 删≥${((p.config?.free?.delete_latency_ms) || 3000)}ms</div>`
+          : ''}
+        ${p.provider_type === 'ip_pool' || p.provider_type === 'sticky'
+          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">提取 ${((p.config?.ip_pool?.refresh_interval_s) || 0)}s</div>`
+          : ''}`
+      : '<div style="color:var(--muted);font-size:11px;margin-top:2px;">配置仅创建者可见</div>';
+
+    rows.push(`
     <tr>
       <td class="mono"><b>${esc(p.name)}</b>${ownerTag}${shareTag}</td>
       <td><span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}">${p.type}</span>${p.sticky_seconds ? `<span class="badge on" style="margin-left:4px;">粘性${p.sticky_seconds}s</span>` : ''}</td>
@@ -969,13 +1026,8 @@ function renderProviders() {
       </td>
       <td>
         ${p.check_interval_s > 0 ? `<span>${p.check_interval_s}s</span>` : `<span style="color:var(--muted);">全局</span>`}
-        ${p.provider_type === 'free'
-          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">采集 ${((p.config?.free?.refresh_interval_s) || 0)}s · 删≥${((p.config?.free?.delete_latency_ms) || 3000)}ms</div>`
-          : ''}
-        ${p.provider_type === 'ip_pool' || p.provider_type === 'sticky'
-          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">提取 ${((p.config?.ip_pool?.refresh_interval_s) || 0)}s</div>`
-          : ''}
-        ${p.min_alive_ratio > 0 ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">存活率≥${p.min_alive_ratio * 100}%才用</div>` : ''}
+        ${detailMeta}
+        ${p.min_alive_ratio > 0 && canSeeFull ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">存活率≥${p.min_alive_ratio * 100}%才用</div>` : ''}
       </td>
       <td class="mono"><b style="color:var(--green)">${p.alive}</b> / ${p.total}</td>
       <td><span class="badge ${regionBadgeClass(p)}">${esc(providerRegionLabel(p.countries))}</span></td>
@@ -983,8 +1035,12 @@ function renderProviders() {
         ${p.last_err ? `<span class="badge off">${esc(p.last_err)}</span>` : `<span class="badge on">正常</span>`}
       </td>
       <td>${ops}</td>
-    </tr>`;
-  }).join('');
+    </tr>`);
+  });
+  if (hidden.length) {
+    rows.push(`<tr><td colspan="8" class="empty" style="text-align:right;">已隐藏 ${hidden.length} 个，点击「恢复显示」可重新看到</td></tr>`);
+  }
+  tb.innerHTML = rows.join('');
 }
 
 async function loadProxies() {
@@ -1251,7 +1307,7 @@ function renderGroups() {
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
     const gwAuth = gwEnabled
-      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000" onclick="copyGateway(this)">复制</button></div>`
+      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:20000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:20000" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
     const rows = (g.tiers || []).map((t, ti) => {
       const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti - 1]?.providers || []);
@@ -1896,8 +1952,24 @@ function openAddProvider() {
   document.getElementById('p-name').readOnly = false;
   document.getElementById('p-public').checked = false;
   document.getElementById('p-public-status').textContent = '私有';
-  // 公开共享开关仅对非 admin 用户有意义：管理员创建的一律全局开通
-  document.getElementById('p-public-row').style.display = isAdmin() ? 'none' : '';
+  // 公开共享开关对所有用户可见：非 admin 创建的个人 Provider 可切换公开/私有；
+  // admin 创建的全局 Provider（owner 空）恒为公开，开关禁用并提示。
+  const pubRow = document.getElementById('p-public-row');
+  if (isAdmin()) {
+    pubRow.style.display = '';
+    document.getElementById('p-public').disabled = true;
+    document.getElementById('p-public').checked = true;
+    document.getElementById('p-public-status').textContent = '公开';
+    document.getElementById('p-public-row').querySelector('label').textContent =
+      '公开共享（管理员创建的是全局 Provider，所有用户均可见，可切换全局可见性）';
+  } else {
+    pubRow.style.display = '';
+    document.getElementById('p-public').disabled = false;
+    document.getElementById('p-public').checked = false;
+    document.getElementById('p-public-status').textContent = '私有';
+    document.getElementById('p-public-row').querySelector('label').textContent =
+      '公开共享（开启后其他用户可见并使用该 Provider，但看不到你的提取 URL / 隧道配置 / 账号密码；关闭则仅自己可用）';
+  }
   customCheckURLs = [];
   defaultCheckURLs.forEach(d => { d.enabled = true; }); // 默认全部勾选
   renderCheckURLs();
@@ -1957,16 +2029,27 @@ function openEditProvider(name) {
 
   toggleTunnelFields();
 
-  // 公开共享开关：非 admin 用户之间对自己的 provider 可见；全局(admin 创建的)
-  // provider 恒为公开，不显示开关。
+  // 公开共享开关：非 admin 用户对自己的私有 provider 可切换公开/私有；
+  // admin 编辑全局 provider（owner 空，恒公开）时开关禁用并提示。
   const owner = cfg.owner || '';
-  if (!isAdmin() && owner && owner === ((currentMe && currentMe.name) || '')) {
-    document.getElementById('p-public-row').style.display = '';
+  const pubRow = document.getElementById('p-public-row');
+  if (isAdmin()) {
+    pubRow.style.display = '';
+    document.getElementById('p-public').disabled = true;
+    document.getElementById('p-public').checked = true;
+    document.getElementById('p-public-status').textContent = '公开';
+    document.getElementById('p-public-row').querySelector('label').textContent =
+      '公开共享（管理员创建的是全局 Provider，所有用户均可见）';
+  } else if (owner && owner === ((currentMe && currentMe.name) || '')) {
+    pubRow.style.display = '';
+    document.getElementById('p-public').disabled = false;
     const pub = !!cfg.public;
     document.getElementById('p-public').checked = pub;
     document.getElementById('p-public-status').textContent = pub ? '公开' : '私有';
+    document.getElementById('p-public-row').querySelector('label').textContent =
+      '公开共享（开启后其他用户可见并使用该 Provider，但看不到你的提取 URL / 隧道配置 / 账号密码；关闭则仅自己可用）';
   } else {
-    document.getElementById('p-public-row').style.display = 'none';
+    pubRow.style.display = 'none';
   }
 
   document.getElementById('provider-modal').classList.add('show');
@@ -2044,7 +2127,7 @@ async function submitProvider() {
     check_interval_s: parseInt(document.getElementById('p-check-interval').value) || 0,
     min_alive_ratio: parseFloat(document.getElementById('p-min-ratio').value) || 0,
     country: document.getElementById('p-country').value.trim().toUpperCase() || undefined,
-    public: !isAdmin() ? document.getElementById('p-public').checked : false,
+    public: document.getElementById('p-public').checked,
   };
   const check_urls = [
     ...defaultCheckURLs.map(d => ({ name: d.name, url: d.url, enabled: d.enabled })),
@@ -2413,7 +2496,7 @@ const APIDOC_ENDPOINTS = [
       { name: 'groups[].primary_weights', type: 'object', desc: '主池各 provider 的调度权重（provider 名 -> 权重），未列出的用 1' },
       { name: 'groups[].backups', type: 'array<object>', desc: '备用池配置列表' },
       { name: 'groups[].min_alive_ratio', type: 'number', desc: '主池阈值（0~1）' },
-      { name: 'groups[].username', type: 'string', desc: '网关用户名（配置后使用 用户名:密码@host:10000 作为本组代理地址）' },
+      { name: 'groups[].username', type: 'string', desc: '网关用户名（配置后使用 用户名:密码@host:20000 作为本组代理地址）' },
     ],
   },
   {
@@ -2618,13 +2701,13 @@ const APIDOC_ENDPOINTS = [
   },
   {
     method: 'ALL', path: '代理网关 (HTTP Proxy Gateway)', auth: 'anonymous', title: '通过代理网关直接中转请求（分组凭证认证）',
-    desc: '两种用法：1) 原生 HTTP 正向代理，在 server.gateway_listen 端口（如 :10000）上运行，客户端用 用户名:密码@host:10000 作为代理地址；2) 路径式代理端点 GET /api/v1/gw?url=<目标>，带 Basic 凭证（Authorization 或 Proxy-Authorization 头），适用于只转发普通路径请求的预览反代环境。',
+    desc: '两种用法：1) 原生 HTTP 正向代理，在 server.gateway_listen 端口（默认 :20000）上运行，客户端用 用户名:密码@host:20000 作为代理地址；2) 路径式代理端点 GET /api/v1/gw?url=<目标>，带 Basic 凭证（Authorization 或 Proxy-Authorization 头），适用于只转发普通路径请求的预览反代环境。',
     params: [
       { name: 'user:pass', type: 'string', req: true, desc: 'URL 形式凭证，绑定一个调度分组；在分组配置的网关用户名/密码', in: 'path' },
       { name: '目标 URL', type: 'string', req: true, desc: '任意 http/https 目标，如 http://baidu.com', in: 'path' },
     ], body: '',
-    curl: 'curl -x 用户名:密码@{HOST}:10000 http://baidu.com\n# 路径式（公网可用）：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"',
-    py: 'import requests\n\nr = requests.get("http://baidu.com", proxies={"http": "http://用户名:密码@{HOST}:10000", "https": "http://用户名:密码@{HOST}:10000"})\nprint(r.status_code)\n\n# 路径式（公网可用）：\nr2 = requests.get(\n    "{HOST}/api/v1/gw",\n    params={"url": "http://baidu.com"},\n    auth=("用户名", "密码"),\n)\nprint(r2.status_code)',
+    curl: 'curl -x 用户名:密码@{HOST}:20000 http://baidu.com\n# 路径式（公网可用）：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"',
+    py: 'import requests\n\nr = requests.get("http://baidu.com", proxies={"http": "http://用户名:密码@{HOST}:20000", "https": "http://用户名:密码@{HOST}:20000"})\nprint(r.status_code)\n\n# 路径式（公网可用）：\nr2 = requests.get(\n    "{HOST}/api/v1/gw",\n    params={"url": "http://baidu.com"},\n    auth=("用户名", "密码"),\n)\nprint(r2.status_code)',
     response: '<目标站点响应内容>',
     resp_fields: [
       { name: 'HTTP(S) 响应', type: 'any', desc: '网关从本组取一个实时可用代理转发请求，返回目标站点的真实响应；主池/备用池自动切换对客户端透明' },

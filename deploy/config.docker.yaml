@@ -1,15 +1,15 @@
 server:
-  listen: ":10002"              # Web 管理控制台 / 消费 API 端口
+  listen: ":10000"              # Web 管理控制台 / 消费 API 端口
   read_timeout_ms: 3000
   write_timeout_ms: 3000
   max_workers: 8192
-  gateway_listen: ":10000"        # HTTP 代理网关端口：可用 curl -x 用户名:密码@域名:10000 直接走分组代理
+  gateway_listen: ":20000"        # HTTP 代理网关端口：可用 curl -x 用户名:密码@域名:20000 直接走分组代理
 
 health_check:
   interval_s: 60               # 每分钟检测一次所有代理
   timeout_ms: 6000           # 免费代理延迟阈值 3s 内需测出真实延迟，故超时放宽到 6s
   concurrency: 256           # 免费代理量级大，并发调高避免检测积压
-  check_url: "http://127.0.0.1:10002/"  # mock target（单 URL 兜底，通常不用）
+  check_url: "http://127.0.0.1:10000/"  # mock target（单 URL 兜底，通常不用）
   # 5 个固定默认测试 URL（均为轻量 IP 检测服务，返回极少量数据，省代理流量）；
   # 新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；也可自定义新增测试 URL。
   # 其中 ip-api.com 会返回代理出口 IP 的国家代码，检测存活的同时顺带刷新代理国家；
@@ -83,7 +83,7 @@ providers:
     enabled: true
     min_alive_ratio: 0.1
     check_interval_s: 60
-    check_url: "http://127.0.0.1:10002/"
+    check_url: "http://127.0.0.1:10000/"
     country: "US"                 # 显式指定国家（海外），入池直接打标，跳过 IP 归属查询
     tunnel:
       scheme: "http"
@@ -98,7 +98,7 @@ providers:
     enabled: false
     min_alive_ratio: 0
     check_interval_s: 60
-    check_url: "http://127.0.0.1:10002/"
+    check_url: "http://127.0.0.1:10000/"
     country: "CN"
     ip_pool:
       extract_url: "http://127.0.0.1:10003/get"
@@ -113,7 +113,7 @@ providers:
     enabled: true
     sticky_seconds: 60
     check_interval_s: 60
-    check_url: "http://127.0.0.1:10002/"
+    check_url: "http://127.0.0.1:10000/"
     country: "HK"
     ip_pool:
       extract_url: "http://127.0.0.1:10003/get"
