@@ -183,11 +183,36 @@ func main() {
 
 	// HTTP proxy gateway: forward traffic through a live proxy from the group
 	// matched by `username:password` credentials configured per group.
-	if cfg.Server.GatewayListen != "" {
+	//
+	// When gateway_listen is empty or equals the console listen address, the
+	// gateway is served on the same port as the admin console (it is wired into
+	// the fasthttp handler as a form of standard forward-proxy / CONNECT
+	// handling). Otherwise it runs as a standalone listener on its own port,
+	// preserving the earlier two-port layout.
+	gwMerged := cfg.Server.GatewayListen == "" || cfg.Server.GatewayListen == cfg.Server.Listen
+	attachGateway := func() error {
 		gw := gateway.New(mgr.Pool(), func() []config.GroupCfg {
 			return srv.GroupList()
 		}, logger)
-		srv.AttachGateway(gw)
+		return srv.AttachGateway(gw)
+	}
+	if gwMerged {
+		// Merged mode: the gateway is always created and served on the console
+		// port so `curl -x user:pass@host:listen` works on the same address.
+		if err := attachGateway(); err != nil {
+			logger.Error("failed to attach merged gateway", "err", err)
+			cancel()
+		} else {
+			logger.Info("proxy gateway merged onto console port", "listen", cfg.Server.Listen)
+		}
+	} else {
+		gw := gateway.New(mgr.Pool(), func() []config.GroupCfg {
+			return srv.GroupList()
+		}, logger)
+		if err := srv.AttachGateway(gw); err != nil {
+			logger.Error("failed to attach standalone gateway", "err", err)
+			cancel()
+		}
 		go func() {
 			if err := gw.Serve(ctx, cfg.Server.GatewayListen); err != nil {
 				logger.Error("proxy gateway stopped", "err", err)

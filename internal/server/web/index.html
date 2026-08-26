@@ -375,11 +375,11 @@ tr.dead-row td { opacity: .5; }
       <table>
         <thead>
           <tr>
-            <th>名称</th><th>类型</th><th>启用</th><th>检测频率</th>
+            <th>名称</th><th>类型</th><th>共享</th><th>启用</th><th>检测频率</th>
             <th>代理 (存活/总数)</th><th>地区分布</th><th>最近状态</th><th>操作</th>
           </tr>
         </thead>
-        <tbody id="provider-tbody"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
+        <tbody id="provider-tbody"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -552,14 +552,6 @@ tr.dead-row td { opacity: .5; }
         <option value="sticky">sticky（长效静态型，粘性会话，时效内同客户端固定同一 IP）</option>
         <option value="free">free（免费源，自动采集公共免费列表，延迟达标才入池）</option>
       </select>
-    </div>
-    <div class="form-row" id="p-public-row" style="display:none;">
-      <label>公开共享（开启后其他用户可见并可使用该 Provider；关闭则仅自己可用）</label>
-      <label class="toggle" style="display:inline-flex;margin-top:4px;">
-        <input type="checkbox" id="p-public" onchange="document.getElementById('p-public-status').textContent = this.checked ? '公开' : '私有'">
-        <span class="slider"></span>
-      </label>
-      <span id="p-public-status" style="color:var(--muted);font-size:12px;margin-left:8px;">私有</span>
     </div>
     <div class="form-row">
       <label>检测频率 check_interval_s（秒，0=全局默认。池内 IP 多久检测一次延迟）</label>
@@ -960,7 +952,7 @@ function renderProviders() {
   const tb = document.getElementById('provider-tbody');
   const hidden = hiddenProviders();
   if (!state.providers.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击上方「添加 Provider」</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="empty">暂无 Provider，点击上方「添加 Provider」</td></tr>';
     return;
   }
   const admin = isAdmin();
@@ -977,18 +969,24 @@ function renderProviders() {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
     const isOwn = admin || owner === me || owner === '';
-    const publicShared = isGlobal || !!(p.config?.public);
     const canSeeFull = isOwn;
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
-    const shareTag = publicShared
-      ? '<span class="badge on" style="margin-left:4px;" title="已公开共享给其他用户">公开</span>'
-      : '<span class="badge" style="margin-left:4px;background:var(--bg);color:var(--muted);border:1px solid var(--border);" title="仅自己可见">私有</span>';
+    // 共享列开关：own 才能切换；全局(owner 空)恒公开且禁用；他人只读显示状态。
+    const shared = isGlobal || !!(p.config?.public);
+    const shareClick = isOwn && !isGlobal
+      ? `onchange="toggleShare('${esc(p.name)}', this.checked)"`
+      : 'disabled';
+    const shareCell = `<label class="toggle" title="${shared ? '已公开共享给其他用户' : '仅自己可见'}">
+      <input type="checkbox" ${shared ? 'checked' : ''} ${shareClick}>
+      <span class="slider"></span>
+    </label>`;
 
     if (hidden.includes(p.name)) {
       rows.push(`<tr>
-        <td class="mono"><b>${esc(p.name)}</b>${ownerTag}${shareTag}</td>
+        <td class="mono"><b>${esc(p.name)}</b>${ownerTag}</td>
+        <td>${shareCell}</td>
         <td colspan="6" style="color:var(--muted);font-size:12px;">已从你的列表隐藏</td>
         <td><button class="btn btn-sm" data-name="${esc(p.name)}" onclick="unhideProvider(this.dataset.name)">恢复显示</button></td>
       </tr>`);
@@ -1016,8 +1014,9 @@ function renderProviders() {
 
     rows.push(`
     <tr>
-      <td class="mono"><b>${esc(p.name)}</b>${ownerTag}${shareTag}</td>
+      <td class="mono"><b>${esc(p.name)}</b>${ownerTag}</td>
       <td><span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}">${p.type}</span>${p.sticky_seconds ? `<span class="badge on" style="margin-left:4px;">粘性${p.sticky_seconds}s</span>` : ''}</td>
+      <td>${shareCell}</td>
       <td>
         <label class="toggle">
           <input type="checkbox" ${p.enabled ? 'checked' : ''} ${isOwn ? '' : 'disabled'} onchange="toggleProvider('${esc(p.name)}', this.checked)">
@@ -1038,7 +1037,7 @@ function renderProviders() {
     </tr>`);
   });
   if (hidden.length) {
-    rows.push(`<tr><td colspan="8" class="empty" style="text-align:right;">已隐藏 ${hidden.length} 个，点击「恢复显示」可重新看到</td></tr>`);
+    rows.push(`<tr><td colspan="9" class="empty" style="text-align:right;">已隐藏 ${hidden.length} 个，点击「恢复显示」可重新看到</td></tr>`);
   }
   tb.innerHTML = rows.join('');
 }
@@ -1902,6 +1901,18 @@ async function toggleProvider(name, enabled) {
   } catch (e) { toast('操作失败: ' + e.message, true); refreshAll(); }
 }
 
+async function toggleShare(name, shared) {
+  try {
+    await api(`/api/v1/admin/providers/${encodeURIComponent(name)}/public`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ public: shared }),
+    });
+    toast(`Provider「${name}」已${shared ? '公开共享' : '改为私有'}`);
+    await refreshAll();
+  } catch (e) { toast('操作失败: ' + e.message, true); refreshAll(); }
+}
+
 async function refreshProvider(name) {
   try {
     await api(`/api/v1/admin/providers/${encodeURIComponent(name)}/refresh`, { method: 'POST' });
@@ -1950,26 +1961,7 @@ function openAddProvider() {
   document.getElementById('p-expire').value = 600;
   document.getElementById('p-type').value = 'tunnel';
   document.getElementById('p-name').readOnly = false;
-  document.getElementById('p-public').checked = false;
-  document.getElementById('p-public-status').textContent = '私有';
-  // 公开共享开关对所有用户可见：非 admin 创建的个人 Provider 可切换公开/私有；
-  // admin 创建的全局 Provider（owner 空）恒为公开，开关禁用并提示。
-  const pubRow = document.getElementById('p-public-row');
-  if (isAdmin()) {
-    pubRow.style.display = '';
-    document.getElementById('p-public').disabled = true;
-    document.getElementById('p-public').checked = true;
-    document.getElementById('p-public-status').textContent = '公开';
-    document.getElementById('p-public-row').querySelector('label').textContent =
-      '公开共享（管理员创建的是全局 Provider，所有用户均可见，可切换全局可见性）';
-  } else {
-    pubRow.style.display = '';
-    document.getElementById('p-public').disabled = false;
-    document.getElementById('p-public').checked = false;
-    document.getElementById('p-public-status').textContent = '私有';
-    document.getElementById('p-public-row').querySelector('label').textContent =
-      '公开共享（开启后其他用户可见并使用该 Provider，但看不到你的提取 URL / 隧道配置 / 账号密码；关闭则仅自己可用）';
-  }
+  // 无公开共享开关：新建时默认为私有，公开共享通过列表的「共享」列开关开启
   customCheckURLs = [];
   defaultCheckURLs.forEach(d => { d.enabled = true; }); // 默认全部勾选
   renderCheckURLs();
@@ -2029,29 +2021,7 @@ function openEditProvider(name) {
 
   toggleTunnelFields();
 
-  // 公开共享开关：非 admin 用户对自己的私有 provider 可切换公开/私有；
-  // admin 编辑全局 provider（owner 空，恒公开）时开关禁用并提示。
-  const owner = cfg.owner || '';
-  const pubRow = document.getElementById('p-public-row');
-  if (isAdmin()) {
-    pubRow.style.display = '';
-    document.getElementById('p-public').disabled = true;
-    document.getElementById('p-public').checked = true;
-    document.getElementById('p-public-status').textContent = '公开';
-    document.getElementById('p-public-row').querySelector('label').textContent =
-      '公开共享（管理员创建的是全局 Provider，所有用户均可见）';
-  } else if (owner && owner === ((currentMe && currentMe.name) || '')) {
-    pubRow.style.display = '';
-    document.getElementById('p-public').disabled = false;
-    const pub = !!cfg.public;
-    document.getElementById('p-public').checked = pub;
-    document.getElementById('p-public-status').textContent = pub ? '公开' : '私有';
-    document.getElementById('p-public-row').querySelector('label').textContent =
-      '公开共享（开启后其他用户可见并使用该 Provider，但看不到你的提取 URL / 隧道配置 / 账号密码；关闭则仅自己可用）';
-  } else {
-    pubRow.style.display = 'none';
-  }
-
+  // 无公开共享开关：公开共享通过列表的「共享」列开关开启
   document.getElementById('provider-modal').classList.add('show');
 }
 
@@ -2127,7 +2097,6 @@ async function submitProvider() {
     check_interval_s: parseInt(document.getElementById('p-check-interval').value) || 0,
     min_alive_ratio: parseFloat(document.getElementById('p-min-ratio').value) || 0,
     country: document.getElementById('p-country').value.trim().toUpperCase() || undefined,
-    public: document.getElementById('p-public').checked,
   };
   const check_urls = [
     ...defaultCheckURLs.map(d => ({ name: d.name, url: d.url, enabled: d.enabled })),

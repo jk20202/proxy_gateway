@@ -60,6 +60,13 @@ func (m *mockManager) SetProviderWeight(name string, weight int32) error { retur
 func (m *mockManager) SetProviderPriority(name string, priority int, minRatio float64) error {
 	return nil
 }
+func (m *mockManager) SetProviderPublic(name string, public bool) error {
+	if cfg, ok := m.cfgMap[name]; ok {
+		cfg.Public = public
+		m.cfgMap[name] = cfg
+	}
+	return nil
+}
 func (m *mockManager) AddProvider(cfg config.ProviderCfg) error                 { return nil }
 func (m *mockManager) RemoveProvider(name string) error                         { return nil }
 func (m *mockManager) UpdateProvider(name string, cfg config.ProviderCfg) error { return nil }

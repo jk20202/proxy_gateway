@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttpadaptor"
 
 	"proxy-pool/internal/auth"
 	"proxy-pool/internal/config"
@@ -35,6 +36,7 @@ type ProviderManager interface {
 	SetProviderEnabled(name string, enabled bool) error
 	SetProviderWeight(name string, weight int32) error
 	SetProviderPriority(name string, priority int, minRatio float64) error
+	SetProviderPublic(name string, public bool) error
 	AddProvider(cfg config.ProviderCfg) error
 	RemoveProvider(name string) error
 	UpdateProvider(name string, cfg config.ProviderCfg) error
@@ -69,6 +71,7 @@ type Server struct {
 	groupsMu     sync.RWMutex
 	groupsFromDB bool
 	gateway      *gateway.Gateway
+	gwHandler    fasthttp.RequestHandler
 	db           *persist.MySQL
 }
 
@@ -201,6 +204,17 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 	}
 
 	return func(ctx *fasthttp.RequestCtx) {
+		// A standard forward-proxy request reaches the console port when the
+		// gateway is merged with the console (server.gateway_listen empty or
+		// equal to server.listen). Dispatch it to the wrapped net/http gateway
+		// handler so `curl -x user:pass@host:port` and CONNECT tunnels work on
+		// the same port. Ordinary console/API requests (origin-form request
+		// targets) are untouched.
+		if s.isProxyRequest(ctx) && s.gwHandler != nil {
+			s.gwHandler(ctx)
+			return
+		}
+
 		method := string(ctx.Method())
 		path := string(ctx.Path())
 
@@ -985,6 +999,23 @@ func (s *Server) handleProviderAction(ctx *fasthttp.RequestCtx, method, path str
 		}
 		writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 		return true
+	case "public":
+		if method != "POST" {
+			return false
+		}
+		var req struct {
+			Public bool `json:"public"`
+		}
+		if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return true
+		}
+		if err := s.mgr.SetProviderPublic(name, req.Public); err != nil {
+			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+			return true
+		}
+		writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+		return true
 	}
 	return false
 }
@@ -1672,8 +1703,43 @@ func (s *Server) persistGroups(groups []config.GroupCfg) error {
 }
 
 // AttachGateway wires the proxy gateway so group CRUD refreshes its creds.
-func (s *Server) AttachGateway(g *gateway.Gateway) {
+// It wraps the net/http gateway handler so standard HTTP forward-proxy requests
+// (absolute-URI and CONNECT tunnels) can be served on the same port as the
+// admin console. When the gateway runs on a separate port this wrapper is
+// simply unused because proxy requests never reach the console handler.
+// It always succeeds; the error return preserves a future proofing boundary.
+func (s *Server) AttachGateway(g *gateway.Gateway) error {
+	if g == nil {
+		return errors.New("nil gateway")
+	}
 	s.gateway = g
+	s.gwHandler = fasthttpadaptor.NewFastHTTPHandler(g)
+	return nil
+}
+
+// isProxyRequest reports whether an incoming request is a standard HTTP forward
+// proxy request (absolute-URI request target or CONNECT tunnel) rather than an
+// origin-form console/API request. Only such requests are dispatched to the
+// merged gateway handler; a path-based request like /api/v1/gw or /api/v1/proxy
+// must keep going through the normal console routing.
+func (s *Server) isProxyRequest(ctx *fasthttp.RequestCtx) bool {
+	// CONNECT tunnel: request target is host:port, e.g. "example.com:443".
+	if ctx.Request.Header.IsConnect() {
+		return true
+	}
+	// Absolute-URI request target (http://host/path) from a forward-proxy client.
+	reqURI := string(ctx.RequestURI())
+	if strings.HasPrefix(reqURI, "http://") || strings.HasPrefix(reqURI, "https://") {
+		return true
+	}
+	// A client may omit a path (proxy target without slash); a Proxy-Authorization
+	// header is a strong forward-proxy signal, but exclude the console's own
+	// path-based gateway endpoint which lives under /api/v1.
+	if len(ctx.Request.Header.Peek("Proxy-Authorization")) > 0 &&
+		!strings.HasPrefix(reqURI, "/api/v1/") {
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleUsage(ctx *fasthttp.RequestCtx) {

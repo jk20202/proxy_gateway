@@ -1,9 +1,10 @@
 server:
-  listen: ":10000"              # Web 管理控制台 / 消费 API 端口
+  listen: ":10000"              # 控制台 + HTTP 代理网关共用端口。改为其它端口即自定义，如 ":8080"
   read_timeout_ms: 3000
   write_timeout_ms: 3000
   max_workers: 8192
-  gateway_listen: ":20000"        # HTTP 代理网关端口：可用 curl -x 用户名:密码@域名:20000 直接走分组代理
+  # gateway_listen 留空 = 网关注入控制台同一端口。如需以前那种独立端口布局，取消注释并指定端口。
+  # gateway_listen: ":20000"
 
 health_check:
   interval_s: 60               # 每分钟检测一次所有代理

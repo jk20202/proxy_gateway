@@ -18,7 +18,7 @@
 - **Webhook + 邮件告警**：provider 失效/恢复、池耗尽、刷新失败时通过 Webhook（钉钉/飞书/Slack 等）与 SMTP 邮件及时通知，内置去重避免告警风暴
 - **结果反馈闭环**：爬虫侧上报成功/失败，实时调整单个代理状态
 - **MySQL + Redis 持久化存储**：MySQL 存低频设置（账户/分组/Provider 配置），Redis 缓存高频代理状态（延迟/国家/存活），配置改动能跨重启保留，全部由 `config.yaml` 驱动
-- **HTTP 代理网关**：按分组凭证鉴权，`curl -x 用户名:密码@主机:20000` 直连组内代理；纯隧道型分组支持 `/direct` 直连端点，把上游地址下发给客户端、数据流量绕过本机（省本机带宽）
+- **HTTP 代理网关**：按分组凭证鉴权，`curl -x 用户名:密码@主机:10000` 直连组内代理；纯隧道型分组支持 `/direct` 直连端点，把上游地址下发给客户端、数据流量绕过本机（省本机带宽）
 - **一键部署**：`deploy/docker-compose.yml` 一条命令拉起 MySQL + Redis + 应用；也提供 Supervisor 进程守护方式（详见「部署」）
 
 ## 架构
@@ -99,7 +99,7 @@ docker compose logs -f proxy-pool   # 观察应用启动日志
 | 入口 | 地址 |
 |------|------|
 | Web 管理控制台 | `http://服务器IP:8080` |
-| 代理网关（HTTP 代理） | `http://用户名:密码@服务器IP:20000` |
+| 代理网关（HTTP 代理） | `http://用户名:密码@服务器IP:10000` |
 
 **常用命令**
 
@@ -228,10 +228,11 @@ go build -o proxy-pool ./cmd/proxy-pool
 
 ```yaml
 server:
-  listen: ":8080"
+  listen: ":8080"     # Web 管理控制台 / 消费 API / HTTP 代理网关共用端口（改此值即自定义端口）
   read_timeout_ms: 3000
   write_timeout_ms: 3000
   max_workers: 8192
+  # gateway_listen: ":20000"   # 可选：设独立代理网关端口；留空则网关注入上面 listen 同一端口
 
 health_check:
   interval_s: 60       # 健康检查周期（秒）：每分钟检测一轮
@@ -418,11 +419,11 @@ groups:
 
 ### 网关直连（省流量）
 
-HTTP 代理网关（`curl -x 用户名:密码@域名:20000 <URL>`）默认由本机中转所有数据流量，会消耗本机带宽。对**纯隧道型分组**（组内所有 provider 均为 `type: tunnel` 且指向同一上游网关），本机无需中转，可直接把上游隧道地址下发给客户端，让数据流量直达隧道服务商、完全绕过本机：
+HTTP 代理网关（`curl -x 用户名:密码@域名:10000 <URL>`）默认由本机中转所有数据流量，会消耗本机带宽。对**纯隧道型分组**（组内所有 provider 均为 `type: tunnel` 且指向同一上游网关），本机无需中转，可直接把上游隧道地址下发给客户端，让数据流量直达隧道服务商、完全绕过本机：
 
 ```bash
 # 先向网关请求直连地址（复用分组凭证鉴权）
-curl -s -x 用户名:密码@域名:20000 http://域名:20000/direct
+curl -s -x 用户名:密码@域名:10000 http://域名:10000/direct
 # 返回示例：{"direct":"http://upuser:uppass@tunnel.example.com:3128"}
 # 混合型/非隧道型分组返回 {"direct":null,"reason":"..."}
 
@@ -431,7 +432,7 @@ curl -x "http://upuser:uppass@tunnel.example.com:3128" <目标URL>
 ```
 
 - 混合分组（含 IP 池/免费/静态代理）无法直连，`/direct` 会返回 `direct:null` 并说明原因，仍需中转。
-- 直连模式不改变现有网关行为：普通 `curl -x 域名:20000` 仍走本机中转。
+- 直连模式不改变现有网关行为：普通 `curl -x 域名:10000` 仍走本机中转。
 
 ## API 文档
 

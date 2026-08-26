@@ -476,6 +476,29 @@ func (m *Manager) SetProviderEnabled(name string, enabled bool) error {
 	return nil
 }
 
+func (m *Manager) SetProviderPublic(name string, public bool) error {
+	m.mu.Lock()
+	mp, ok := m.provs[name]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("provider %q not found", name)
+	}
+	if mp.cfg.Public == public {
+		m.mu.Unlock()
+		return nil
+	}
+	mp.cfg.Public = public
+	cfg := mp.cfg
+	m.mu.Unlock()
+	m.logger.Info("provider public updated", "provider", name, "public", public)
+	if m.persist != nil {
+		if err := m.persist.SaveProvider(cfg); err != nil {
+			m.logger.Error("failed to persist provider public", "provider", name, "err", err)
+		}
+	}
+	return nil
+}
+
 func (m *Manager) SetProviderWeight(name string, weight int32) error {
 	if weight <= 0 {
 		weight = 1
