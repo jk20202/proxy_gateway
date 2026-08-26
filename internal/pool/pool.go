@@ -42,11 +42,17 @@ type layerSnap struct {
 	name       string
 	proxies    []*model.Proxy
 	aliveTotal int // 该层全部代理数（含 dead）
-	aliveCount int // 该层存活代理数
+	aliveCount int   // 该层存活代理数
 	minRatio   float64
 	useSWRR    bool // 层内全是池化型（静态/IP池）时用平滑加权轮询
-	cumW       []int64
-	totalW     int64
+	// weight[i] 原始终与 proxies[i] 对应的基础权重（含 group 级 provider
+	// 权重覆盖），累加后即 totalW。pickSWRR 用它做延迟感知的基础权重。
+	weight []int64
+	cumW   []int64
+	totalW int64
+	// refLatency 该层代理的平均延迟（ms），用于 SWRR 延迟感知权重；0 表示
+	// 尚无延迟样本，此时退回纯 SWRR。
+	refLatency int64
 }
 
 func (s *Snapshot) Proxies() []*model.Proxy {
@@ -403,11 +409,32 @@ func buildLayer(name string, providers []string, weights map[string]int, minRati
 		if w <= 0 {
 			w = 1
 		}
+		l.weight = append(l.weight, int64(w))
 		acc += int64(w)
 		l.cumW = append(l.cumW, acc)
 	}
 	l.totalW = acc
+	l.refLatency = layerRefLatency(l.proxies)
 	return l
+}
+
+// layerRefLatency returns the average measured latency (ms) across the layer's
+// proxies that have at least one sample. Returns 0 when there are no samples,
+// which disables latency scaling for the layer.
+func layerRefLatency(proxies []*model.Proxy) int64 {
+	var sum int64
+	var cnt int
+	for _, pr := range proxies {
+		lat := pr.LatencyMS.Load()
+		if lat > 0 {
+			sum += lat
+			cnt++
+		}
+	}
+	if cnt == 0 {
+		return 0
+	}
+	return sum / int64(cnt)
 }
 
 func (p *Pool) Seq() uint64 {
@@ -495,7 +522,7 @@ func (p *Pool) pickLayer(l *layerSnap, exclude map[string]struct{}) *model.Proxy
 	}
 	if len(exclude) == 0 {
 		if l.useSWRR {
-			return p.pickSWRR(l.proxies)
+			return p.pickSWRR(l)
 		}
 		target := rand.Int64N(l.totalW)
 		j := sort.Search(len(l.cumW), func(i int) bool { return l.cumW[i] > target })
@@ -505,7 +532,7 @@ func (p *Pool) pickLayer(l *layerSnap, exclude map[string]struct{}) *model.Proxy
 	if l.useSWRR {
 		// try up to len(proxies) rounds to find an unexcluded one
 		for range len(l.proxies) {
-			pr := p.pickSWRR(l.proxies)
+			pr := p.pickSWRR(l)
 			if _, ok := exclude[pr.ID]; !ok {
 				return pr
 			}
@@ -523,19 +550,58 @@ func (p *Pool) pickLayer(l *layerSnap, exclude map[string]struct{}) *model.Proxy
 	return nil
 }
 
-// pickSWRR performs smooth weighted round-robin selection over the given
-// proxies. SWRR state is tracked per proxy ID.
-func (p *Pool) pickSWRR(proxies []*model.Proxy) *model.Proxy {
+// latencyScaledWeight scales a base weight by the proxy's observed latency
+// relative to the layer's average latency. Proxies faster than average get a
+// boost (up to 2x), slower ones a discount (down to 0.5x). Latency of 0
+// (unknown / not yet measured) is treated as neutral so we do not emit more
+// traffic to unmeasured proxies. The clamp keeps every proxy in rotation to
+// spread load and avoid a single-proxy hotspot.
+func latencyScaledWeight(ref int64, base int64, latencyMS int64) int64 {
+	if base <= 0 {
+		base = 1
+	}
+	if latencyMS <= 0 || ref <= 0 {
+		return base
+	}
+	factor := float64(ref) / float64(latencyMS)
+	if factor > 2 {
+		factor = 2
+	} else if factor < 0.5 {
+		factor = 0.5
+	}
+	w := int64(float64(base) * factor)
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// pickSWRR performs smooth weighted round-robin selection over the layer's
+// proxies. The base weight for each proxy is the configured weight, scaled by
+// a latency-aware factor so that slower proxies receive proportionally less
+// traffic while a minimum share is retained to avoid concentrating on a single
+// fast proxy (which would also crowd out the others and create a hotspot).
+// When no latency samples are available the factor is 1, i.e. behaviour is
+// identical to plain SWRR. SWRR state is tracked per proxy ID.
+func (p *Pool) pickSWRR(l *layerSnap) *model.Proxy {
 	p.swrrMu.Lock()
 	defer p.swrrMu.Unlock()
 
+	// reference latency is recomputed on every selection so fast/slow proxy
+	// behaviour tracks live health results rather than the build-time snapshot.
+	ref := layerRefLatency(l.proxies)
 	var total int64
 	var best *model.Proxy
 	var bestCW int64 = math.MinInt64
-	for _, pr := range proxies {
-		cw := p.swrr[pr.ID] + int64(pr.Weight)
+	for i, pr := range l.proxies {
+		w := l.weight[i]
+		if w <= 0 {
+			w = 1
+		}
+		w = latencyScaledWeight(ref, w, pr.LatencyMS.Load())
+		cw := p.swrr[pr.ID] + w
 		p.swrr[pr.ID] = cw
-		total += int64(pr.Weight)
+		total += w
 		if cw > bestCW {
 			bestCW = cw
 			best = pr

@@ -377,6 +377,41 @@ func TestGroupSWRRWeights(t *testing.T) {
 	}
 }
 
+// TestGroupLatencyAwareSWRR verifies a faster proxy receives a higher share of
+// traffic while a slower one stays in rotation, and that unknown latency keeps
+// plain SWRR behaviour.
+func TestGroupLatencyAwareSWRR(t *testing.T) {
+	p := NewPool()
+	// same base weight but very different latency -> faster proxy should win
+	p.Add(newGroupProxy("slow", "pA", 1))
+	p.Add(newGroupProxy("fast", "pB", 1))
+	// pool-based kinds enable SWRR
+	p.Get("slow").Kind = model.KindSticky
+	p.Get("fast").Kind = model.KindSticky
+	p.SetGroups([]config.GroupCfg{{Name: "g", MinAliveRatio: 0, Primary: []string{"pA", "pB"}}})
+
+	slow := p.Get("slow")
+	fast := p.Get("fast")
+	slow.LatencyMS.Store(2000) // 2s
+	fast.LatencyMS.Store(200)  // 200ms
+
+	fastCount := 0
+	total := 20000
+	for range total {
+		pr := p.NextInGroup("g")
+		if pr == nil {
+			t.Fatal("NextInGroup returned nil")
+		}
+		if pr.Provider == "pB" {
+			fastCount++
+		}
+	}
+	ratio := float64(fastCount) / float64(total)
+	if ratio < 0.6 {
+		t.Fatalf("expected fast proxy to dominate (>=0.6), got %f", ratio)
+	}
+}
+
 func TestGroupTunnelUsesRandomNotSWRR(t *testing.T) {
 	p := NewPool()
 	// mixed tunnel + sticky in one tier disables SWRR

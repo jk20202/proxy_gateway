@@ -353,7 +353,7 @@ groups:
 - 每个分组 = 主池（`primary`）+ 按顺序的多级备用池（`backups`）。
 - 只有当前层的存活率 ≥ 该层 `min_alive_ratio` 时才使用该层；否则依次尝试下一层。
 - 主池恢复后自动切回主池。
-- **调度算法**：某一层内的 provider 全部为非隧道型（`ip_pool` / `sticky` / `free`）时使用**平滑加权轮询（SWRR）**按权重均匀分配；只要该层含隧道型 provider 则退化为加权随机。
+- **调度算法**：某一层内的 provider 全部为非隧道型（`ip_pool` / `sticky` / `free`）时使用**平滑加权轮询（SWRR）**按权重均匀分配；只要该层含隧道型 provider 则退化为加权随机。SWRR 额外叠加**延迟感知权重**（快代理承担更多流量，配额钳制在 0.5x~2x 避免单点热点），无延迟样本时退化为纯 SWRR。完整调度机制见 [`docs/scheduling.md`](docs/scheduling.md)。
 - 同一 provider 可被多个分组引用；未配置 groups 时退化为下面的优先级模式。
 
 **主池权重 = 使用率百分比**（`primary_weights`）
