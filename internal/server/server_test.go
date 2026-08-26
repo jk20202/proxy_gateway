@@ -34,14 +34,25 @@ func (m mockProvider) Initial(ctx context.Context) ([]*model.Proxy, error) { ret
 func (m mockProvider) Refresh(ctx context.Context) ([]*model.Proxy, error) { return nil, nil }
 
 type mockManager struct {
-	provs map[string]provider.Provider
+	provs  map[string]provider.Provider
+	cfgMap map[string]config.ProviderCfg
 }
 
 func (m *mockManager) Providers() map[string]provider.Provider {
 	return m.provs
 }
 
-func (m *mockManager) ProviderList() []pool.ProviderInfo { return nil }
+func (m *mockManager) ProviderList() []pool.ProviderInfo {
+	out := make([]pool.ProviderInfo, 0, len(m.cfgMap))
+	for name, cfg := range m.cfgMap {
+		out = append(out, pool.ProviderInfo{Name: name, Enabled: true, Weight: 1, Config: cfg})
+	}
+	return out
+}
+func (m *mockManager) ProviderConfig(name string) (config.ProviderCfg, bool) {
+	cfg, ok := m.cfgMap[name]
+	return cfg, ok
+}
 func (m *mockManager) SetProviderEnabled(name string, enabled bool) error {
 	return nil
 }
@@ -382,13 +393,127 @@ func TestAuthNonAdminCannotAdmin(t *testing.T) {
 	}))
 	h := s.Handler()
 
+	// accounts stay admin-only: non-admin is rejected
 	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("GET")
+	ctx.Request.SetRequestURI("/api/v1/admin/accounts")
+	ctx.Request.Header.Set("Authorization", "Bearer utok")
+	h(ctx)
+	if ctx.Response.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin on accounts, got %d", ctx.Response.StatusCode())
+	}
+
+	// provider list is now open to any authenticated account
+	ctx = &fasthttp.RequestCtx{}
 	ctx.Request.Header.SetMethod("GET")
 	ctx.Request.SetRequestURI("/api/v1/admin/providers")
 	ctx.Request.Header.Set("Authorization", "Bearer utok")
 	h(ctx)
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected 200 for non-admin on providers list, got %d", ctx.Response.StatusCode())
+	}
+}
+
+func TestProviderOwnershipIsolation(t *testing.T) {
+	s, _ := newTestServer(nil)
+	s.mgr.(*mockManager).cfgMap = map[string]config.ProviderCfg{
+		"mine":   {Name: "mine", Owner: "alice"},
+		"theirs": {Name: "theirs", Owner: "bob"},
+		"global": {Name: "global", Owner: ""},
+	}
+	s.AttachAuth(auth.New([]config.AccountCfg{
+		{Name: "alice", Password: "pw", Token: "at", Role: "user", Enabled: true},
+		{Name: "admin", Password: "pw", Token: "adm", Role: "admin", Enabled: true},
+	}))
+	h := s.Handler()
+
+	req := func(method, path string) *fasthttp.Response {
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod(method)
+		ctx.Request.SetRequestURI(path)
+		ctx.Request.Header.Set("Authorization", "Bearer at")
+		h(ctx)
+		return &ctx.Response
+	}
+
+	// alice may delete her own provider (mock RemoveProvider is a no-op -> 200)
+	resp := req("DELETE", "/api/v1/admin/providers/mine")
+	if resp.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected 200 deleting own provider, got %d %s", resp.StatusCode(), resp.Body())
+	}
+
+	// alice may NOT delete someone else's private provider -> 403
+	resp = req("DELETE", "/api/v1/admin/providers/theirs")
+	if resp.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 deleting other's provider, got %d", resp.StatusCode())
+	}
+
+	// alice may NOT delete a global provider -> 403 (global owned by admin)
+	resp = req("DELETE", "/api/v1/admin/providers/global")
+	if resp.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 deleting global provider, got %d", resp.StatusCode())
+	}
+
+	// alice list sees her own private provider but not bob's
+	body := req("GET", "/api/v1/admin/providers").Body()
+	if !bytes.Contains(body, []byte(`"mine"`)) {
+		t.Fatalf("expected to see own provider 'mine' in list, got %s", body)
+	}
+	if bytes.Contains(body, []byte(`"theirs"`)) {
+		t.Fatalf("alice must not see bob's private provider, got %s", body)
+	}
+}
+
+func TestGroupOwnershipIsolation(t *testing.T) {
+	s, _ := newTestServer(nil)
+	s.AttachGroups([]config.GroupCfg{
+		{Name: "glob", MinAliveRatio: 0, Primary: []string{"mock"}},
+		{Name: "alicegrp", MinAliveRatio: 0, Primary: []string{"mock"}, Owner: "alice"},
+		{Name: "bobgrp", MinAliveRatio: 0, Primary: []string{"mock"}, Owner: "bob"},
+	})
+	s.AttachAuth(auth.New([]config.AccountCfg{
+		{Name: "alice", Password: "pw", Token: "at", Role: "user", Enabled: true},
+	}))
+	h := s.Handler()
+	req := func(method, path string) *fasthttp.Response {
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod(method)
+		ctx.Request.SetRequestURI(path)
+		ctx.Request.Header.Set("Authorization", "Bearer at")
+		h(ctx)
+		return &ctx.Response
+	}
+
+	// alice CANNOT delete bob's private group -> 403
+	resp := req("DELETE", "/api/v1/admin/groups?name=bobgrp")
+	if resp.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 deleting bob's group, got %d", resp.StatusCode())
+	}
+
+	// alice CANNOT delete the global group -> 403 (admin-only)
+	resp = req("DELETE", "/api/v1/admin/groups?name=glob")
+	if resp.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 deleting global group, got %d", resp.StatusCode())
+	}
+
+	// alice CAN use her own private group via the proxy API
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("GET")
+	ctx.Request.SetRequestURI("/api/v1/proxy?group=alicegrp")
+	ctx.Request.Header.Set("Authorization", "Bearer at")
+	h(ctx)
+	if ctx.Response.StatusCode() == fasthttp.StatusForbidden {
+		t.Fatalf("alice should be allowed her own group, got 403")
+	}
+
+	// alice CANNOT use bob's private group -> 403
+	ctx = &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("GET")
+	ctx.Request.SetRequestURI("/api/v1/proxy?group=bobgrp")
+	ctx.Request.Header.Set("Authorization", "Bearer at")
+	h(ctx)
 	if ctx.Response.StatusCode() != fasthttp.StatusForbidden {
-		t.Fatalf("expected 403 for non-admin, got %d", ctx.Response.StatusCode())
+		t.Fatalf("expected 403 using bob's group, got %d", ctx.Response.StatusCode())
 	}
 }
 

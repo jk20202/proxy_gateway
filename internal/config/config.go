@@ -77,6 +77,10 @@ type GroupCfg struct {
 	// this group (auto failover across tiers is transparent to the client).
 	Username string `yaml:"username" json:"username"`
 	Password string `yaml:"password" json:"password"`
+	// Owner 归属账户名：空=全局分组（所有用户可用，通常由 admin 创建）；非空=
+	// 私有分组，仅 owner 本人与 admin 可查看/编辑/删除/使用。私有分组的网关
+	// 凭证同样只对 owner 开放。
+	Owner string `yaml:"owner" json:"owner"`
 }
 
 // BackupPool is one fallback tier of a group. It may reference multiple
@@ -206,6 +210,13 @@ type ProviderCfg struct {
 	Tunnel  *TunnelConfig   `yaml:"tunnel" json:"tunnel"`
 	IPPool  *IPPoolConfig   `yaml:"ip_pool" json:"ip_pool"`
 	Free    *FreePoolConfig `yaml:"free" json:"free"`
+	// Owner 归属账户名：空=全局（由 admin 创建，所有用户可见可用）；非空=私有，
+	// 仅 owner 本人与 admin 可查看、编辑、删除。
+	Owner string `yaml:"owner" json:"owner"`
+	// Public 公开共享开关：仅对私有 Provider（Owner 非空）有意义。开启后其他
+	// 用户可见并可使用该 Provider 的代理；关闭后仅 owner 可见。全局 Provider
+	// 恒为公开。
+	Public bool `yaml:"public" json:"public"`
 }
 
 type TunnelConfig struct {

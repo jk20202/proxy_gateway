@@ -31,6 +31,7 @@ var webFS embed.FS
 
 type ProviderManager interface {
 	ProviderList() []pool.ProviderInfo
+	ProviderConfig(name string) (config.ProviderCfg, bool)
 	SetProviderEnabled(name string, enabled bool) error
 	SetProviderWeight(name string, weight int32) error
 	SetProviderPriority(name string, priority int, minRatio float64) error
@@ -244,7 +245,20 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		}
 
 		if strings.HasPrefix(path, "/api/v1/admin/") {
-			if !s.authorize(ctx, true) {
+			// Provider / group / proxy management is available to any
+			// authenticated account; ownership checks inside each handler
+			// restrict what a non-admin may read or mutate. Everything else
+			// under /admin (accounts, usage, alerts, health) stays admin-only.
+			adminOnly := true
+			switch {
+			case strings.HasPrefix(path, "/api/v1/admin/providers"):
+				adminOnly = false
+			case strings.HasPrefix(path, "/api/v1/admin/groups"):
+				adminOnly = false
+			case strings.HasPrefix(path, "/api/v1/admin/proxies"):
+				adminOnly = false
+			}
+			if !s.authorize(ctx, adminOnly) {
 				return
 			}
 		} else if strings.HasPrefix(path, "/api/v1/") {
@@ -340,6 +354,103 @@ func currentAccountObj(ctx *fasthttp.RequestCtx) *auth.Account {
 	return v
 }
 
+// isAdminUser reports whether the requesting account holds the admin role.
+func (s *Server) isAdminUser(ctx *fasthttp.RequestCtx) bool {
+	acct := currentAccountObj(ctx)
+	return acct != nil && acct.IsAdmin()
+}
+
+// providerVisible reports whether the account may see a provider: admins and
+// global providers are always visible; otherwise the provider must be owned by
+// the account or marked public.
+func (s *Server) providerVisible(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
+	if s.isAdminUser(ctx) {
+		return true
+	}
+	if cfg.Owner == "" {
+		return true
+	}
+	acct := currentAccount(ctx)
+	if acct == "" {
+		return true
+	}
+	if cfg.Owner == acct {
+		return true
+	}
+	return cfg.Public
+}
+
+// providerWritable reports whether the account may mutate a provider: admins
+// may mutate anything, others only their own providers.
+func (s *Server) providerWritable(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
+	if s.isAdminUser(ctx) {
+		return true
+	}
+	acct := currentAccount(ctx)
+	if acct == "" {
+		return true
+	}
+	return cfg.Owner == acct
+}
+
+// groupVisible reports whether the account may see/use a group: admins and
+// global groups are always available; private groups belong to their owner.
+func (s *Server) groupVisible(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
+	if s.isAdminUser(ctx) {
+		return true
+	}
+	if g.Owner == "" {
+		return true
+	}
+	acct := currentAccount(ctx)
+	if acct == "" {
+		return true
+	}
+	return g.Owner == acct
+}
+
+// groupWritable reports whether the account may mutate a group: admins may
+// mutate any group, others only their own private groups. Global groups are
+// managed exclusively by admins.
+func (s *Server) groupWritable(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
+	if s.isAdminUser(ctx) {
+		return true
+	}
+	acct := currentAccount(ctx)
+	if acct == "" {
+		return true
+	}
+	return g.Owner != "" && g.Owner == acct
+}
+
+// findGroup returns the group with the given name.
+func (s *Server) findGroup(name string) (config.GroupCfg, bool) {
+	s.groupsMu.RLock()
+	defer s.groupsMu.RUnlock()
+	for _, g := range s.groups {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return config.GroupCfg{}, false
+}
+
+// requireOwnedGroup resolves a group by name and verifies the requesting
+// account is allowed to mutate it. Returns (cfg, ok); on failure a 403/404
+// response has already been written.
+func (s *Server) requireOwnedGroup(ctx *fasthttp.RequestCtx, name string) (config.GroupCfg, bool) {
+	g, found := s.findGroup(name)
+	if !found {
+		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "group not found: " + name})
+		return config.GroupCfg{}, false
+	}
+	if !s.groupWritable(ctx, g) {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "access denied: you do not own this group"})
+		return config.GroupCfg{}, false
+	}
+	return g, true
+}
+
 // groupAllowed checks whether the requesting account may consume from the
 // given group. When no group is requested, true is returned.
 func (s *Server) groupAllowed(ctx *fasthttp.RequestCtx, group string) bool {
@@ -349,6 +460,18 @@ func (s *Server) groupAllowed(ctx *fasthttp.RequestCtx, group string) bool {
 	acct := currentAccountObj(ctx)
 	if acct == nil {
 		return true
+	}
+	g, found := s.findGroup(group)
+	if !found {
+		return false
+	}
+	if acct.IsAdmin() {
+		return true
+	}
+	// Private groups are usable only by their owner; global groups are
+	// subject to the account's group whitelist.
+	if g.Owner != "" {
+		return g.Owner == acct.Name
 	}
 	return acct.CanUseGroup(group)
 }
@@ -621,11 +744,23 @@ func (s *Server) providerStats() map[string]any {
 // ---- Admin API ----
 
 func (s *Server) handleListProviders(ctx *fasthttp.RequestCtx) {
-	resp := map[string]any{"providers": s.mgr.ProviderList()}
+	all := s.mgr.ProviderList()
+	visible := all[:0]
+	for _, p := range all {
+		if s.providerVisible(ctx, p.Config) {
+			visible = append(visible, p)
+		}
+	}
+	resp := map[string]any{"providers": visible}
 	if s.checker != nil {
 		resp["default_check_urls"] = s.checker.DefaultCheckURLs()
 	}
 	writeJSON(ctx, fasthttp.StatusOK, resp)
+}
+
+// providerAccessDenied writes a uniform 403 response.
+func (s *Server) providerAccessDenied(ctx *fasthttp.RequestCtx) {
+	writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "access denied: you do not own this provider"})
 }
 
 func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {
@@ -634,6 +769,12 @@ func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
+	// A non-admin can only create a provider owned by themselves. They may
+	// choose to share it publicly, but the owner is always themselves. Admin
+	// may create global providers (Owner="") or providers owned by any account.
+	if !s.isAdminUser(ctx) {
+		cfg.Owner = currentAccount(ctx)
+	}
 	if err := s.mgr.AddProvider(cfg); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -641,10 +782,29 @@ func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 }
 
+// requireOwnedProvider resolves a provider by name and verifies the requesting
+// account is allowed to mutate it. Returns (cfg, ok); on failure a 403/404
+// response has already been written.
+func (s *Server) requireOwnedProvider(ctx *fasthttp.RequestCtx, name string) (config.ProviderCfg, bool) {
+	cfg, found := s.mgr.ProviderConfig(name)
+	if !found {
+		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "provider not found"})
+		return config.ProviderCfg{}, false
+	}
+	if !s.providerWritable(ctx, cfg) {
+		s.providerAccessDenied(ctx)
+		return config.ProviderCfg{}, false
+	}
+	return cfg, true
+}
+
 func (s *Server) handleRemoveProvider(ctx *fasthttp.RequestCtx) {
 	name := string(ctx.QueryArgs().Peek("name"))
 	if name == "" {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "name required"})
+		return
+	}
+	if _, ok := s.requireOwnedProvider(ctx, name); !ok {
 		return
 	}
 	if err := s.mgr.RemoveProvider(name); err != nil {
@@ -666,6 +826,9 @@ func (s *Server) handleRemoveProviderByName(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	name := parts[0]
+	if _, ok := s.requireOwnedProvider(ctx, name); !ok {
+		return
+	}
 	if err := s.mgr.RemoveProvider(name); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -682,10 +845,19 @@ func (s *Server) handleUpdateProvider(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	name := parts[0]
+	if _, ok := s.requireOwnedProvider(ctx, name); !ok {
+		return
+	}
 	var cfg config.ProviderCfg
 	if err := json.Unmarshal(ctx.PostBody(), &cfg); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
+	}
+	// Preserve ownership on update: a non-admin must keep their own provider
+	// private to themselves, and may not transfer it or make it global. They
+	// may, however, flip the public-share flag.
+	if !s.isAdminUser(ctx) {
+		cfg.Owner = currentAccount(ctx)
 	}
 	if err := s.mgr.UpdateProvider(name, cfg); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -703,6 +875,11 @@ func (s *Server) handleProviderAction(ctx *fasthttp.RequestCtx, method, path str
 	name := parts[0]
 	if name == "" {
 		return false
+	}
+	// Every action (enable/disable/weight/refresh/priority) mutates the
+	// provider, so enforce ownership before dispatching.
+	if _, ok := s.requireOwnedProvider(ctx, name); !ok {
+		return true
 	}
 	action := parts[1]
 
@@ -1156,7 +1333,9 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 	cfgMap := map[string]config.GroupCfg{}
 	s.groupsMu.RLock()
 	for _, g := range s.groups {
-		cfgMap[g.Name] = g
+		if s.groupVisible(ctx, g) {
+			cfgMap[g.Name] = g
+		}
 	}
 	s.groupsMu.RUnlock()
 
@@ -1164,6 +1343,9 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 		// groups configured but pool snapshot not yet built
 		out := make([]map[string]any, 0, len(cfgMap))
 		for _, g := range s.groups {
+			if !s.groupVisible(ctx, g) {
+				continue
+			}
 			tiers := []map[string]any{{"name": "primary", "alive_total": 0, "alive_count": 0, "min_alive_ratio": g.MinAliveRatio, "usable": false}}
 			for _, b := range g.Backups {
 				tiers = append(tiers, map[string]any{"name": b.Name, "alive_total": 0, "alive_count": 0, "min_alive_ratio": b.MinAliveRatio, "usable": false})
@@ -1172,7 +1354,7 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 				"group": g.Name, "type": g.Type, "tiers": tiers,
 				"primary": g.Primary, "primary_weights": g.PrimaryWeights, "backups": g.Backups,
 				"min_alive_ratio": g.MinAliveRatio, "username": g.Username, "password": g.Password,
-				"regions": g.Regions,
+				"regions": g.Regions, "owner": g.Owner,
 			})
 		}
 		writeJSON(ctx, fasthttp.StatusOK, map[string]any{"groups": out})
@@ -1180,7 +1362,12 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 	}
 	out := make([]map[string]any, 0, len(stats))
 	for _, g := range stats {
-		cfg, _ := cfgMap[g.Group]
+		cfg, ok := cfgMap[g.Group]
+		if !ok {
+			// pool has a group the requesting account cannot see
+			continue
+		}
+		_ = ok
 		m := map[string]any{
 			"group": g.Group, "type": g.Type, "tiers": g.Tiers,
 			"primary": cfg.Primary, "primary_weights": cfg.PrimaryWeights, "backups": cfg.Backups,
@@ -1188,6 +1375,7 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 			"username":        cfg.Username,
 			"password":        cfg.Password,
 			"regions":         cfg.Regions,
+			"owner":           cfg.Owner,
 		}
 		out = append(out, m)
 	}
@@ -1200,6 +1388,11 @@ func (s *Server) handleAddGroup(ctx *fasthttp.RequestCtx) {
 	if err := json.Unmarshal(ctx.PostBody(), &g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
+	}
+	// Non-admins always create groups owned by themselves. Only admins can
+	// create global groups (Owner="") shared by every account.
+	if !s.isAdminUser(ctx) {
+		g.Owner = currentAccount(ctx)
 	}
 	if err := s.validateGroup(g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1226,12 +1419,20 @@ func (s *Server) handleUpdateGroup(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
+	if _, ok := s.requireOwnedGroup(ctx, name); !ok {
+		return
+	}
 	var g config.GroupCfg
 	if err := json.Unmarshal(ctx.PostBody(), &g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
 	g.Name = name // path name is authoritative (rename unsupported)
+	// Preserve ownership on update: non-admins may not turn their group into
+	// a global one, and may not claim a global group.
+	if !s.isAdminUser(ctx) {
+		g.Owner = currentAccount(ctx)
+	}
 	if err := s.validateGroup(g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1259,6 +1460,9 @@ func (s *Server) handleRemoveGroup(ctx *fasthttp.RequestCtx) {
 	name := string(ctx.QueryArgs().Peek("name"))
 	if name == "" {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "name required"})
+		return
+	}
+	if _, ok := s.requireOwnedGroup(ctx, name); !ok {
 		return
 	}
 	s.groupsMu.Lock()

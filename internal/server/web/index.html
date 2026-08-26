@@ -354,9 +354,9 @@ tr.dead-row td { opacity: .5; }
   </div>
 
   <div class="tabs">
-    <div class="tab active" data-view="providers" data-admin="1" onclick="switchView('providers')">Provider 管理</div>
+    <div class="tab active" data-view="providers" onclick="switchView('providers')">Provider 管理</div>
     <div class="tab" data-view="proxies" data-admin="1" onclick="switchView('proxies')">代理列表</div>
-    <div class="tab" data-view="groups" data-admin="1" onclick="switchView('groups')">调度分组</div>
+    <div class="tab" data-view="groups" onclick="switchView('groups')">调度分组</div>
     <div class="tab" data-view="accounts" data-admin="1" onclick="switchView('accounts')">账户管理</div>
     <div class="tab" data-view="usage" data-admin="1" onclick="switchView('usage')">调用统计</div>
     <div class="tab" data-view="alerts" data-admin="1" onclick="switchView('alerts')">告警配置</div>
@@ -552,6 +552,14 @@ tr.dead-row td { opacity: .5; }
         <option value="sticky">sticky（长效静态型，粘性会话，时效内同客户端固定同一 IP）</option>
         <option value="free">free（免费源，自动采集公共免费列表，延迟达标才入池）</option>
       </select>
+    </div>
+    <div class="form-row" id="p-public-row" style="display:none;">
+      <label>公开共享（开启后其他用户可见并可使用该 Provider；关闭则仅自己可用）</label>
+      <label class="toggle" style="display:inline-flex;margin-top:4px;">
+        <input type="checkbox" id="p-public" onchange="document.getElementById('p-public-status').textContent = this.checked ? '公开' : '私有'">
+        <span class="slider"></span>
+      </label>
+      <span id="p-public-status" style="color:var(--muted);font-size:12px;margin-left:8px;">私有</span>
     </div>
     <div class="form-row">
       <label>检测频率 check_interval_s（秒，0=全局默认。池内 IP 多久检测一次延迟）</label>
@@ -924,6 +932,8 @@ function renderProviders() {
     tb.innerHTML = '<tr><td colspan="8" class="empty">暂无 Provider，点击上方「添加 Provider」</td></tr>';
     return;
   }
+  const admin = isAdmin();
+  const me = (currentMe && currentMe.name) || '';
   // Stable order regardless of API response order: enabled first, grouped by
   // type, then by name. Numbers update in place without reordering the rows.
   const ordered = state.providers.slice().sort((a, b) => {
@@ -931,13 +941,29 @@ function renderProviders() {
     if ((a.type || '') !== (b.type || '')) return (a.type || '').localeCompare(b.type || '');
     return (a.name || '').localeCompare(b.name || '');
   });
-  tb.innerHTML = ordered.map(p => `
+  tb.innerHTML = ordered.map(p => {
+    const owner = p.config?.owner || '';
+    const isGlobal = owner === '';
+    const isOwn = isAdmin() || owner === me || owner === '';
+    const publicShared = isGlobal || !!(p.config?.public);
+    const ownerTag = isGlobal
+      ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
+      : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
+    const shareTag = publicShared
+      ? '<span class="badge on" style="margin-left:4px;" title="已公开共享">公开</span>'
+      : '<span class="badge" style="margin-left:4px;background:var(--bg);color:var(--muted);border:1px solid var(--border);" title="仅自己可见">私有</span>';
+    const ops = isOwn
+      ? `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
+        <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
+        <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>`
+      : `<span style="color:var(--muted);font-size:12px;">仅管理人可操作</span>`;
+    return `
     <tr>
-      <td class="mono"><b>${esc(p.name)}</b></td>
+      <td class="mono"><b>${esc(p.name)}</b>${ownerTag}${shareTag}</td>
       <td><span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}">${p.type}</span>${p.sticky_seconds ? `<span class="badge on" style="margin-left:4px;">粘性${p.sticky_seconds}s</span>` : ''}</td>
       <td>
         <label class="toggle">
-          <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="toggleProvider('${esc(p.name)}', this.checked)">
+          <input type="checkbox" ${p.enabled ? 'checked' : ''} ${isOwn ? '' : 'disabled'} onchange="toggleProvider('${esc(p.name)}', this.checked)">
           <span class="slider"></span>
         </label>
       </td>
@@ -956,12 +982,9 @@ function renderProviders() {
       <td>
         ${p.last_err ? `<span class="badge off">${esc(p.last_err)}</span>` : `<span class="badge on">正常</span>`}
       </td>
-      <td>
-        <button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
-        <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
-        <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>
-      </td>
-    </tr>`).join('');
+      <td>${ops}</td>
+    </tr>`;
+  }).join('');
 }
 
 async function loadProxies() {
@@ -1220,6 +1243,13 @@ function renderGroups() {
   }
   el.innerHTML = state.groups.map((g, gi) => {
     const gwEnabled = g.username && g.password;
+    const owner = g.owner || '';
+    const isGlobal = owner === '';
+    const me = (currentMe && currentMe.name) || '';
+    const canEdit = isAdmin() || (owner && owner === me);
+    const ownerTag = isGlobal
+      ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
+      : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
     const gwAuth = gwEnabled
       ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:10000" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
@@ -1246,13 +1276,16 @@ function renderGroups() {
       <div class="group-head">
         <div class="group-title">
           <span class="mono group-name">${esc(g.group)}</span>
+          ${ownerTag}
           ${g.type ? `<span class="badge kind">${esc(g.type)}</span>` : ''}
           ${regionBadges}
           <span class="badge ${gwEnabled ? 'on' : 'off'}">${gwEnabled ? '网关已启用' : '网关未启用'}</span>
         </div>
         <div class="group-actions">
-          <button class="btn btn-sm" data-name="${esc(g.group)}" onclick="openGroupModal(this.dataset.name)">编辑</button>
-          <button class="btn btn-sm btn-danger" data-name="${esc(g.group)}" onclick="removeGroup(this.dataset.name)">删除</button>
+          ${canEdit
+            ? `<button class="btn btn-sm" data-name="${esc(g.group)}" onclick="openGroupModal(this.dataset.name)">编辑</button>
+               <button class="btn btn-sm btn-danger" data-name="${esc(g.group)}" onclick="removeGroup(this.dataset.name)">删除</button>`
+            : '<span style="color:var(--muted);font-size:12px;">仅管理人可操作</span>'}
         </div>
       </div>
       ${gwAuth}
@@ -1861,6 +1894,10 @@ function openAddProvider() {
   document.getElementById('p-expire').value = 600;
   document.getElementById('p-type').value = 'tunnel';
   document.getElementById('p-name').readOnly = false;
+  document.getElementById('p-public').checked = false;
+  document.getElementById('p-public-status').textContent = '私有';
+  // 公开共享开关仅对非 admin 用户有意义：管理员创建的一律全局开通
+  document.getElementById('p-public-row').style.display = isAdmin() ? 'none' : '';
   customCheckURLs = [];
   defaultCheckURLs.forEach(d => { d.enabled = true; }); // 默认全部勾选
   renderCheckURLs();
@@ -1919,6 +1956,19 @@ function openEditProvider(name) {
   document.getElementById('p-free-max-proxies').value = fr.max_proxies || 0;
 
   toggleTunnelFields();
+
+  // 公开共享开关：非 admin 用户之间对自己的 provider 可见；全局(admin 创建的)
+  // provider 恒为公开，不显示开关。
+  const owner = cfg.owner || '';
+  if (!isAdmin() && owner && owner === ((currentMe && currentMe.name) || '')) {
+    document.getElementById('p-public-row').style.display = '';
+    const pub = !!cfg.public;
+    document.getElementById('p-public').checked = pub;
+    document.getElementById('p-public-status').textContent = pub ? '公开' : '私有';
+  } else {
+    document.getElementById('p-public-row').style.display = 'none';
+  }
+
   document.getElementById('provider-modal').classList.add('show');
 }
 
@@ -1994,6 +2044,7 @@ async function submitProvider() {
     check_interval_s: parseInt(document.getElementById('p-check-interval').value) || 0,
     min_alive_ratio: parseFloat(document.getElementById('p-min-ratio').value) || 0,
     country: document.getElementById('p-country').value.trim().toUpperCase() || undefined,
+    public: !isAdmin() ? document.getElementById('p-public').checked : false,
   };
   const check_urls = [
     ...defaultCheckURLs.map(d => ({ name: d.name, url: d.url, enabled: d.enabled })),
@@ -2050,9 +2101,48 @@ async function submitProvider() {
 }
 
 function switchView(name) {
+  const tab = document.querySelector('.tab[data-view="' + name + '"]');
+  if (tab && tab.dataset.admin === '1' && !isAdmin()) return; // non-admin may not open admin-only views
+  const wanted = document.querySelector('.view[id="view-' + name + '"]');
+  if (!wanted) return;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
   if (name === 'apidoc') renderAPIDoc();
+}
+
+// applyTabsForRole hides admin-only tabs and their views from non-admin
+// accounts, then moves the active view to the first permitted one.
+function applyTabsForRole() {
+  const admin = isAdmin();
+  const tabs = document.querySelectorAll('.tab');
+  let firstAllowed = null;
+  tabs.forEach(t => {
+    const isAdminOnly = t.dataset.admin === '1';
+    if (isAdminOnly && !admin) {
+      t.style.display = 'none';
+    } else {
+      t.style.display = '';
+      if (!firstAllowed) firstAllowed = t.dataset.view;
+    }
+  });
+  // hide admin-only views from non-admins
+  document.querySelectorAll('.view').forEach(v => {
+    const tab = document.querySelector('.tab[data-view="' + v.id.replace('view-', '') + '"]');
+    const isAdminOnly = tab && tab.dataset.admin === '1';
+    if (isAdminOnly && !admin) {
+      v.classList.remove('active');
+      v.style.display = 'none';
+    } else {
+      v.style.display = '';
+    }
+  });
+  // ensure a permitted view is active
+  const active = document.querySelector('.tab.active');
+  const activeOK = active && active.style.display !== 'none';
+  if (!activeOK) {
+    const start = firstAllowed || 'providers';
+    switchView(start);
+  }
 }
 
 // ---- API 文档 ----
@@ -2740,6 +2830,7 @@ document.getElementById('acct-modal').addEventListener('click', e => {
     return;
   }
   refreshAll();
+  applyTabsForRole();
   setInterval(refreshAll, 3000);
 })();
 </script>

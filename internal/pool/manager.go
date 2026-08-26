@@ -300,6 +300,18 @@ func (m *Manager) GetProvider(name string) (provider.Provider, bool) {
 	return mp.provider, true
 }
 
+// ProviderConfig returns the immutable config of a provider, used for
+// ownership checks before mutating or deleting it.
+func (m *Manager) ProviderConfig(name string) (config.ProviderCfg, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mp, ok := m.provs[name]
+	if !ok {
+		return config.ProviderCfg{}, false
+	}
+	return mp.cfg, true
+}
+
 func (m *Manager) AddProvider(cfg config.ProviderCfg) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("provider name is required")
