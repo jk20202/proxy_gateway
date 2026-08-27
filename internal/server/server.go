@@ -373,19 +373,20 @@ func (s *Server) isAdminUser(ctx *fasthttp.RequestCtx) bool {
 	return acct != nil && acct.IsAdmin()
 }
 
-// providerVisible reports whether the account may see a provider: admins and
-// global providers are always visible; otherwise the provider must be owned by
-// the account or marked public.
+// providerVisible reports whether the account may see a provider: admins see
+// everything; a global provider (Owner="") is visible to everyone while it is
+// marked Public (admin can switch it off to hide it from regular users);
+// otherwise the provider must be owned by the account or marked public.
 func (s *Server) providerVisible(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
 	if s.isAdminUser(ctx) {
-		return true
-	}
-	if cfg.Owner == "" {
 		return true
 	}
 	acct := currentAccount(ctx)
 	if acct == "" {
 		return true
+	}
+	if cfg.Owner == "" {
+		return cfg.Public
 	}
 	if cfg.Owner == acct {
 		return true
@@ -406,13 +407,11 @@ func (s *Server) providerWritable(ctx *fasthttp.RequestCtx, cfg config.ProviderC
 	return cfg.Owner == acct
 }
 
-// groupVisible reports whether the account may see/use a group: admins and
-// global groups are always available; private groups belong to their owner.
+// groupVisible reports whether the account may see/use a group. Groups are
+// private by design: a regular user only ever sees groups they own. Global
+// groups (Owner="") are managed by admins and visible to admins only.
 func (s *Server) groupVisible(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
 	if s.isAdminUser(ctx) {
-		return true
-	}
-	if g.Owner == "" {
 		return true
 	}
 	acct := currentAccount(ctx)

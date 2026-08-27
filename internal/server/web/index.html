@@ -413,7 +413,7 @@ tr.dead-row td { opacity: .5; }
   <div class="view" id="view-groups">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-        <h2 style="margin:0;">调度分组 <span class="refresh-hint">主池存活率跌破阈值时自动切备用池；配置网关用户名/密码后，直接使用 用户名:密码@域名:20000 作为代理地址</span></h2>
+        <h2 style="margin:0;">调度分组 <span class="refresh-hint">主池存活率跌破阈值时自动切备用池；配置网关用户名/密码后，直接使用 用户名:密码@域名 作为代理地址</span></h2>
         <button class="btn btn-primary" onclick="openGroupModal()">新增分组</button>
       </div>
       <div id="groups-container"><div class="empty">加载中...</div></div>
@@ -695,7 +695,7 @@ tr.dead-row td { opacity: .5; }
       </div>
       <div class="gs-row" style="margin-top:12px;">
         <div class="gs-field">
-          <label>网关用户名（配置后使用 用户名:密码@域名:20000）</label>
+          <label>网关用户名（配置后使用 用户名:密码@域名 作为代理地址）</label>
           <input id="g-username" placeholder="可空">
         </div>
         <div class="gs-field">
@@ -944,7 +944,7 @@ function showProviderUsage(name) {
   const usage = `取代理接口（需你的账户 Token）：
 GET /api/v1/proxy?group=<你的分组>
 或直接走该分组网关：
-curl -x <网关用户名>:<网关密码>@<域名>:20000 <目标URL>`;
+curl -x <网关用户名>:<网关密码>@<域名> <目标URL>`;
   alert(usage);
 }
 
@@ -968,17 +968,20 @@ function renderProviders() {
   ordered.forEach(p => {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
-    const isOwn = admin || owner === me || owner === '';
+    const isOwn = admin || (owner !== '' && owner === me);
     const canSeeFull = isOwn;
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
-    // 共享列开关：own 才能切换；全局(owner 空)恒公开且禁用；他人只读显示状态。
-    const shared = isGlobal || !!(p.config?.public);
-    const shareClick = isOwn && !isGlobal
+    // 共享列开关：own（admin 或本人）才能切换；普通用户对全局/他人 provider 只读显示状态。
+    const shared = !!(p.config?.public);
+    const shareClick = isOwn
       ? `onchange="toggleShare('${esc(p.name)}', this.checked)"`
       : 'disabled';
-    const shareCell = `<label class="toggle" title="${shared ? '已公开共享给其他用户' : '仅自己可见'}">
+    const shareTitle = isGlobal
+      ? (shared ? '全局 Provider，对普通用户公开' : '全局 Provider，仅管理员可见')
+      : (shared ? '已公开共享给其他用户' : '仅自己可见');
+    const shareCell = `<label class="toggle" title="${shareTitle}">
       <input type="checkbox" ${shared ? 'checked' : ''} ${shareClick}>
       <span class="slider"></span>
     </label>`;
@@ -1044,6 +1047,7 @@ function renderProviders() {
 
 async function loadProxies() {
   if (!proxyAutoRefresh) return;
+  if (!isAdmin()) return;
   try {
     const data = await api('/api/v1/admin/proxies');
     state.proxies = data.proxies || [];
@@ -1123,6 +1127,7 @@ function latencyBar(latencyMS, maxMS = 3000) {
 let alertConfig = null;
 
 async function loadAlerts() {
+  if (!isAdmin()) return;
   try {
     alertConfig = await api('/api/v1/admin/alerts');
     renderWebhooks();
@@ -1306,7 +1311,7 @@ function renderGroups() {
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
     const gwAuth = gwEnabled
-      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:20000</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}:20000" onclick="copyGateway(this)">复制</button></div>`
+      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
     const rows = (g.tiers || []).map((t, ti) => {
       const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti - 1]?.providers || []);
@@ -1758,6 +1763,7 @@ async function copyGateway(btn) {
 }
 
 async function loadAccounts() {
+  if (!isAdmin()) return;
   try {
     const data = await api('/api/v1/admin/accounts');
     state.accounts = data.accounts || [];
@@ -1863,6 +1869,7 @@ async function toggleAccount(name, enabled) {
 }
 
 async function loadUsage() {
+  if (!isAdmin()) return;
   try {
     const data = await api('/api/v1/admin/usage');
     state.usage = data.accounts || [];
@@ -1889,7 +1896,7 @@ function renderUsage() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
+  await Promise.allSettled([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
 }
 
 async function toggleProvider(name, enabled) {
@@ -2465,7 +2472,7 @@ const APIDOC_ENDPOINTS = [
       { name: 'groups[].primary_weights', type: 'object', desc: '主池各 provider 的调度权重（provider 名 -> 权重），未列出的用 1' },
       { name: 'groups[].backups', type: 'array<object>', desc: '备用池配置列表' },
       { name: 'groups[].min_alive_ratio', type: 'number', desc: '主池阈值（0~1）' },
-      { name: 'groups[].username', type: 'string', desc: '网关用户名（配置后使用 用户名:密码@host:20000 作为本组代理地址）' },
+      { name: 'groups[].username', type: 'string', desc: '网关用户名（配置后使用 用户名:密码@host 作为本组代理地址）' },
     ],
   },
   {
@@ -2670,13 +2677,13 @@ const APIDOC_ENDPOINTS = [
   },
   {
     method: 'ALL', path: '代理网关 (HTTP Proxy Gateway)', auth: 'anonymous', title: '通过代理网关直接中转请求（分组凭证认证）',
-    desc: '两种用法：1) 原生 HTTP 正向代理，在 server.gateway_listen 端口（默认 :20000）上运行，客户端用 用户名:密码@host:20000 作为代理地址；2) 路径式代理端点 GET /api/v1/gw?url=<目标>，带 Basic 凭证（Authorization 或 Proxy-Authorization 头），适用于只转发普通路径请求的预览反代环境。',
+    desc: '两种用法：1) 原生 HTTP 正向代理，与 Web 控制台合并监听同一端口（server.listen，默认 :10000），客户端用 用户名:密码@host 作为代理地址；2) 路径式代理端点 GET /api/v1/gw?url=<目标>，带 Basic 凭证（Authorization 或 Proxy-Authorization 头），适用于只转发普通路径请求的预览反代环境。',
     params: [
       { name: 'user:pass', type: 'string', req: true, desc: 'URL 形式凭证，绑定一个调度分组；在分组配置的网关用户名/密码', in: 'path' },
       { name: '目标 URL', type: 'string', req: true, desc: '任意 http/https 目标，如 http://baidu.com', in: 'path' },
     ], body: '',
-    curl: 'curl -x 用户名:密码@{HOST}:20000 http://baidu.com\n# 路径式（公网可用）：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"',
-    py: 'import requests\n\nr = requests.get("http://baidu.com", proxies={"http": "http://用户名:密码@{HOST}:20000", "https": "http://用户名:密码@{HOST}:20000"})\nprint(r.status_code)\n\n# 路径式（公网可用）：\nr2 = requests.get(\n    "{HOST}/api/v1/gw",\n    params={"url": "http://baidu.com"},\n    auth=("用户名", "密码"),\n)\nprint(r2.status_code)',
+    curl: 'curl -x 用户名:密码@{HOST} http://baidu.com\n# 路径式（公网可用）：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"',
+    py: 'import requests\n\nr = requests.get("http://baidu.com", proxies={"http": "http://用户名:密码@{HOST}", "https": "http://用户名:密码@{HOST}"})\nprint(r.status_code)\n\n# 路径式（公网可用）：\nr2 = requests.get(\n    "{HOST}/api/v1/gw",\n    params={"url": "http://baidu.com"},\n    auth=("用户名", "密码"),\n)\nprint(r2.status_code)',
     response: '<目标站点响应内容>',
     resp_fields: [
       { name: 'HTTP(S) 响应', type: 'any', desc: '网关从本组取一个实时可用代理转发请求，返回目标站点的真实响应；主池/备用池自动切换对客户端透明' },
