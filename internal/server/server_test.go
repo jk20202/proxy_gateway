@@ -79,7 +79,10 @@ func newTestServer(proxies []*model.Proxy) (*Server, *pool.Pool) {
 	for _, pr := range proxies {
 		p.Add(pr)
 	}
-	mgr := &mockManager{provs: map[string]provider.Provider{"mock": mockProvider{kind: model.KindTunnel}}}
+	mgr := &mockManager{
+		provs:  map[string]provider.Provider{"mock": mockProvider{kind: model.KindTunnel}},
+		cfgMap: map[string]config.ProviderCfg{"mock": {Name: "mock", Type: "tunnel"}},
+	}
 	s := NewWithPool(p, mgr, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return s, p
 }
@@ -636,4 +639,108 @@ func TestAdminGroupsAPI(t *testing.T) {
 	if !bytes.Contains(resp.Body(), []byte(`"g1"`)) {
 		t.Fatalf("groups api missing group: %s", resp.Body())
 	}
+}
+
+func TestMarketAndSubscription(t *testing.T) {
+	// Account manager with a sharable public provider owned by "alice" and a
+	// private one owned by "alice". Subscriber is "bob".
+	am := auth.New([]config.AccountCfg{
+		{Name: "alice", Password: "alice", Token: "alice-tok", Role: "admin", Enabled: true},
+		{Name: "bob", Password: "bob", Token: "bob-tok", Enabled: true},
+	})
+
+	s, _ := newTestServer(nil)
+	s.AttachAuth(am)
+	s.mgr.(*mockManager).cfgMap = map[string]config.ProviderCfg{
+		"public-share": {Name: "public-share", Type: "tunnel", Owner: "alice", Public: true},
+		"private-only": {Name: "private-only", Type: "tunnel", Owner: "alice"},
+	}
+	s.mgr.(*mockManager).provs["public-share"] = mockProvider{kind: model.KindTunnel}
+	s.mgr.(*mockManager).provs["private-only"] = mockProvider{kind: model.KindTunnel}
+	h := s.Handler()
+
+	// alice (admin) sees both providers as her own.
+	resp := doAuthed(h, "GET", "/api/v1/admin/providers", nil, "alice-tok")
+	if resp.StatusCode() != fasthttp.StatusOK {
+		_ = am.List()
+		t.Fatalf("alice list: %d %s", resp.StatusCode(), resp.Body())
+	}
+	body := resp.Body()
+	if !bytes.Contains(body, []byte(`"public-share"`)) || !bytes.Contains(body, []byte(`"private-only"`)) {
+		t.Fatalf("alice list missing providers: %s", body)
+	}
+
+	// bob cannot see alice's private provider and lists only his own (none).
+	resp = doAuthed(h, "GET", "/api/v1/admin/providers", nil, "bob-tok")
+	if !bytes.Contains(resp.Body(), []byte(`"providers":[]`)) {
+		t.Fatalf("bob should see no providers: %s", resp.Body())
+	}
+
+	// bob browses the market: only public-share.
+	resp = doAuthed(h, "GET", "/api/v1/admin/providers/market", nil, "bob-tok")
+	if resp.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("market: %d", resp.StatusCode())
+	}
+	if !bytes.Contains(resp.Body(), []byte(`"public-share"`)) {
+		t.Fatalf("market missing public-share: %s", resp.Body())
+	}
+	if bytes.Contains(resp.Body(), []byte(`"private-only"`)) {
+		t.Fatalf("market leaked private provider: %s", resp.Body())
+	}
+
+	// bob subscribes to public-share.
+	resp = doAuthed(h, "POST", "/api/v1/admin/providers/public-share/subscribe", nil, "bob-tok")
+	if resp.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("subscribe: %d %s", resp.StatusCode(), resp.Body())
+	}
+
+	// After subscribing, bob lists his providers and sees public-share.
+	resp = doAuthed(h, "GET", "/api/v1/admin/providers", nil, "bob-tok")
+	if !bytes.Contains(resp.Body(), []byte(`"public-share"`)) {
+		t.Fatalf("bob list missing subscribed provider: %s", resp.Body())
+	}
+
+	// Market no longer lists public-share for bob.
+	resp = doAuthed(h, "GET", "/api/v1/admin/providers/market", nil, "bob-tok")
+	if bytes.Contains(resp.Body(), []byte(`"public-share"`)) {
+		t.Fatalf("market still lists subscribed provider: %s", resp.Body())
+	}
+
+	// Bob cannot subscribe to his own — here he doesn't own any, but subscribing
+	// to a non-public provider should fail.
+	resp = doAuthed(h, "POST", "/api/v1/admin/providers/private-only/subscribe", nil, "bob-tok")
+	if resp.StatusCode() != fasthttp.StatusForbidden {
+		t.Fatalf("expected 403 for non-public, got %d %s", resp.StatusCode(), resp.Body())
+	}
+
+	// Unsubscribe removes the provider.
+	resp = doAuthed(h, "DELETE", "/api/v1/admin/providers/public-share/subscribe", nil, "bob-tok")
+	if resp.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("unsubscribe: %d %s", resp.StatusCode(), resp.Body())
+	}
+	resp = doAuthed(h, "GET", "/api/v1/admin/providers", nil, "bob-tok")
+	if bytes.Contains(resp.Body(), []byte(`"public-share"`)) {
+		t.Fatalf("unsubscribed provider still visible: %s", resp.Body())
+	}
+}
+
+func mustAddAccount(t *testing.T, am *auth.Manager, c config.AccountCfg) {
+	t.Helper()
+	if err := am.AddAccount(c); err != nil {
+		t.Fatalf("AddAccount: %v", err)
+	}
+}
+
+func doAuthed(h fasthttp.RequestHandler, method, path string, body []byte, token string) *fasthttp.Response {
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod(method)
+	ctx.Request.SetRequestURI(path)
+	if body != nil {
+		ctx.Request.SetBody(body)
+	}
+	if token != "" {
+		ctx.Request.Header.Set("Authorization", "Bearer "+token)
+	}
+	h(ctx)
+	return &ctx.Response
 }

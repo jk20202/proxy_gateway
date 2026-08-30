@@ -18,6 +18,7 @@ type Config struct {
 	Alerts      AlertConfig   `yaml:"alerts" json:"alerts"`
 	Geo         GeoConfig     `yaml:"geo" json:"geo"`
 	Storage     StorageConfig `yaml:"storage" json:"storage"`
+	FreeAPI     FreeAPIConfig `yaml:"free_api" json:"free_api"`
 }
 
 // StorageConfig configures persistent storage: MySQL for low-frequency settings
@@ -93,14 +94,17 @@ type BackupPool struct {
 
 // AccountCfg is an internal user. Password is used for web login, Token for
 // API consumption calls. Groups restricts which scheduling groups the account
-// may use (empty = all groups).
+// may use (empty = all groups). Subscriptions lists provider names the account
+// has subscribed to from the shared market; providers not on this list are
+// completely invisible to the account (no stats, no proxy list, no group use).
 type AccountCfg struct {
-	Name     string   `yaml:"name" json:"name"`
-	Password string   `yaml:"password" json:"password"`
-	Token    string   `yaml:"token" json:"token"`
-	Role     string   `yaml:"role" json:"role"` // admin / user
-	Enabled  bool     `yaml:"enabled" json:"enabled"`
-	Groups   []string `yaml:"groups" json:"groups"`
+	Name          string   `yaml:"name" json:"name"`
+	Password      string   `yaml:"password" json:"password"`
+	Token         string   `yaml:"token" json:"token"`
+	Role          string   `yaml:"role" json:"role"` // admin / user
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	Groups        []string `yaml:"groups" json:"groups"`
+	Subscriptions []string `yaml:"subscriptions" json:"subscriptions"`
 }
 
 // DBConfig configures the optional SQLite usage store.
@@ -248,6 +252,21 @@ type FreePoolConfig struct {
 	MaxProxies      int    `yaml:"max_proxies" json:"max_proxies"`
 	MaxSpeedMS      int    `yaml:"max_speed_ms" json:"max_speed_ms"`           // 只采集上报延迟低于该值的代理；默认 3000 (3s)
 	DeleteLatencyMS int    `yaml:"delete_latency_ms" json:"delete_latency_ms"` // 健康检测延迟超过该值直接删除；默认 3000 (3s)
+}
+
+// FreeAPIConfig exposes free-proxy collection as an on-demand HTTP API. When
+// enabled the service serves GET /api/v1/free-proxies: every call scrapes the
+// configured feed, keeps only HTTP proxies whose reported speed is below
+// MaxSpeedMS, and returns them one per line (ip:port). Providers consume the
+// endpoint as an ip_pool extract_url, so scraping happens only when the pool
+// pulls, instead of running a local long-lived crawler.
+type FreeAPIConfig struct {
+	Enabled    bool   `yaml:"enabled" json:"enabled"`
+	FeedURL    string `yaml:"feed_url" json:"feed_url"`
+	MaxSpeedMS int    `yaml:"max_speed_ms" json:"max_speed_ms"`
+	// Token optionally guards the endpoint. Empty means open access (suitable
+	// for loopback-only deployments).
+	Token string `yaml:"token" json:"token"`
 }
 
 // EnabledCheckURLs returns this provider's enabled custom health-check URLs.

@@ -37,6 +37,16 @@ geo:
   # url: "http://ip-api.com/batch"   # 批量归属查询端点，可替换为自建服务
   enrich_interval_s: 60               # 每隔多少秒扫描一次未标记国家的代理并回填
 
+# 免费代理采集 API：把免费代理抓取开放成按需接口，不本地常驻爬虫。
+# 调用 GET /api/v1/free-proxies 时才去爬取源站，只保留上报延迟低于 max_speed_ms 的 HTTP 代理，
+# 每行一个 ip:port 返回。Provider 用 type=ip_pool + extract_url 指向该接口，
+# 与第三方代理平台的提取 IP 连接一致——都是调用后拿到 IP 代理池。
+free_api:
+  enabled: true
+  feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
+  max_speed_ms: 2000
+  # token: ""               # 非空则调用需带 ?token= 或 Bearer token；留空=仅建议内网使用
+
 # 账户：配置后 Web 与消费 API 均需鉴权（Web 用 name+password 登录，消费 API 用 token）。
 # 留空数组则鉴权关闭（不推荐生产使用）。
 accounts:
@@ -57,35 +67,23 @@ db:
 # 组内 provider 全部为非隧道型（ip_pool/sticky/free）时用平滑加权轮询(SWRR)，含隧道型则加权随机。
 # username/password：网关凭证。配置后即可用 `curl -x 用户名:密码@域名:10000 <目标URL>` 直接经由本组代理转发请求，
 # 网关按凭证匹配分组并从该组实时取一个可用代理中转，组内主备池自动切换对客户端透明。
-groups:
-  # 免费代理分组：按"域名相关+free"命名，采集自公共免费源，延迟低于 3 秒的才收，
-  # 每分钟检测一次，实测延迟超过 3 秒或不可用即删；无可用时同样支持备用池兜底。
-  - name: "charlespikachu-free"
-    type: "free"
-    min_alive_ratio: 0
-    username: "free"              # 网关用户名
-    password: "free-pass"
-    primary: ["charlespikachu-free"]
-    # backups:
-    #   - name: "fallback-paid"
-    #     min_alive_ratio: 0
-    #     providers: ["mock-tunnel"]
+groups: []
 
 providers:
-  # 免费代理源：采集自公共免费源，只保留上报延迟低于 max_speed_ms 的 HTTP 代理。
-  # 免费代理不可用即删（健康检测一次失败，或实测延迟超过 delete_latency_ms），不告警。
-  # 不设上限、不过期：只要代理还能用、延迟达标就一直保留，按检测频率自动淘汰超标者。
-  - name: "charlespikachu-free"
-    type: "free"
+  # 示例：免费代理改为走采集 API。extract_url 指向本机 free_api 接口，
+  # 每次刷新时调用接口拿 IP，采集发生在调用时；owner 绑定账户，public 供他人订阅。
+  - name: "free-proxies"
+    type: "ip_pool"
+    owner: "admin"
+    public: true
     enabled: true
     min_alive_ratio: 0
-    check_interval_s: 60          # 检测频率：池内代理每 60s 检测一次延迟
-    check_url: "http://www.gstatic.com/generate_204"   # 免费代理的真实连通性检测目标（204 轻量探测）
-    free:
-      feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
-      refresh_interval_s: 600               # 采集频率：每 10 分钟重新采集一次
-      max_speed_ms: 3000                    # 只收上报延迟低于 3 秒的（页面上自己的测速）
-      delete_latency_ms: 3000               # 每次检测实测延迟超过 3 秒的直接删除
+    check_interval_s: 60
+    check_url: "http://www.gstatic.com/generate_204"
+    ip_pool:
+      extract_url: "http://127.0.0.1:8080/api/v1/free-proxies"
+      refresh_interval_s: 600
+      expire_after_s: 3600
 
 # 持久化存储：MySQL 存低频设置（账户/分组/provider 配置），Redis 缓存高频代理状态（延迟/国家/存活）。
 # 两者均可选；不配置则退回原行为（账户仅内存、分组持久化到 groups.json）。

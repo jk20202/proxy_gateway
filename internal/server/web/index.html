@@ -117,6 +117,8 @@ td.mono { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-si
 .group-gw .gw-label { color: var(--blue); font-weight: 600; }
 .group-gw code { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--text); }
 .group-gw.muted { color: var(--muted); margin: 4px 0 10px; font-size: 12px; }
+.group-gw .gw-hint { width: 100%; color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.5; }
+.group-gw .gw-hint code { font-size: 11px; }
 .group-card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -190,6 +192,7 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
 }
 .toggle input:checked + .slider { background: var(--green); }
 .toggle input:checked + .slider:before { transform: translateX(18px); }
+.toggle input:disabled + .slider { opacity: .45; cursor: not-allowed; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .tab {
   padding: 8px 16px; cursor: pointer; color: var(--muted);
@@ -349,8 +352,6 @@ tr.dead-row td { opacity: .5; }
     <div class="metric"><div class="label">代理总数</div><div class="value blue" id="m-total">-</div></div>
     <div class="metric"><div class="label">存活代理</div><div class="value green" id="m-alive">-</div></div>
     <div class="metric"><div class="label">已启用 Provider</div><div class="value amber" id="m-enabled">-</div></div>
-    <div class="metric"><div class="label">隧道型 Provider</div><div class="value" id="m-tunnel">-</div></div>
-    <div class="metric"><div class="label">IP池型 Provider</div><div class="value" id="m-ippool">-</div></div>
   </div>
 
   <div class="tabs">
@@ -380,6 +381,15 @@ tr.dead-row td { opacity: .5; }
           </tr>
         </thead>
         <tbody id="provider-tbody"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:12px;">
+      <h2>公开市场 <span class="refresh-hint">可添加的共享 Provider</span></h2>
+      <table>
+        <thead>
+          <tr><th>名称</th><th>类型</th><th>创建者</th><th>代理 (存活/总数)</th><th>操作</th></tr>
+        </thead>
+        <tbody id="market-tbody"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -550,7 +560,6 @@ tr.dead-row td { opacity: .5; }
         <option value="tunnel">tunnel（动态隧道型，平台自动轮换出口 IP）</option>
         <option value="ip_pool">ip_pool（动态提取型，从 API 拉取 IP 列表）</option>
         <option value="sticky">sticky（长效静态型，粘性会话，时效内同客户端固定同一 IP）</option>
-        <option value="free">free（免费源，自动采集公共免费列表，延迟达标才入池）</option>
       </select>
     </div>
     <div class="form-row">
@@ -622,33 +631,6 @@ tr.dead-row td { opacity: .5; }
       </div>
     </div>
 
-    <div id="free-fields" style="display:none;">
-      <div class="form-row">
-        <label>免费源 feed_url（返回 JSON 的免费代理列表地址）</label>
-        <input id="p-free-feed" placeholder="https://example.com/proxies.json">
-      </div>
-      <div class="form-row">
-        <label>刷新采集间隔（秒）</label>
-        <input id="p-free-refresh" type="number" value="600">
-      </div>
-      <div class="form-row">
-        <label>最大采集延迟 max_speed_ms（源站上报延迟超过此值不采集，默认 3000）</label>
-        <input id="p-free-max-speed" type="number" value="3000">
-      </div>
-      <div class="form-row">
-        <label>删除延迟阈值 delete_latency_ms（健康检测延迟超过此值直接删除，默认 3000）</label>
-        <input id="p-free-delete-latency" type="number" value="3000">
-      </div>
-      <div class="form-row">
-        <label>过期时间（秒，0=不过期，默认 0）</label>
-        <input id="p-free-expire" type="number" value="0">
-      </div>
-      <div class="form-row">
-        <label>采集上限 max_proxies（0=不限量，默认 0）</label>
-        <input id="p-free-max-proxies" type="number" value="0">
-      </div>
-    </div>
-
     <div class="form-row">
       <label>测试 URL 列表（勾选启用；任一可达即判定该代理存活。默认 5 个来自全局配置，可取消勾选；也可自定义新增多个）</label>
     </div>
@@ -675,32 +657,16 @@ tr.dead-row td { opacity: .5; }
       <div class="gs-title">基本信息</div>
       <div class="gs-row">
         <div class="gs-field">
-          <label>名称（唯一）</label>
-          <input id="g-name" placeholder="例如 residential">
-        </div>
-        <div class="gs-field">
-          <label>类型</label>
-          <select id="g-type">
-            <option value="">默认</option>
-            <option value="static">static</option>
-            <option value="free">free</option>
-            <option value="tunnel">tunnel</option>
-            <option value="high-quality">high-quality</option>
-          </select>
-        </div>
-        <div class="gs-field">
-          <label>主池存活率阈值 min_alive_ratio</label>
-          <input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0">
-        </div>
-      </div>
-      <div class="gs-row" style="margin-top:12px;">
-        <div class="gs-field">
-          <label>网关用户名（配置后使用 用户名:密码@域名 作为代理地址）</label>
-          <input id="g-username" placeholder="可空">
+          <label>网关用户名（即分组名称，配置后使用 用户名:密码@域名 作为代理地址）</label>
+          <input id="g-username" placeholder="例如 residential">
         </div>
         <div class="gs-field">
           <label>网关密码</label>
           <input id="g-password" placeholder="可空">
+        </div>
+        <div class="gs-field">
+          <label>主池存活率阈值 min_alive_ratio</label>
+          <input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0">
         </div>
       </div>
     </div>
@@ -807,9 +773,14 @@ function authHeaders() {
 }
 
 async function api(path, opts = {}) {
+  // Destructure headers out so the spread below does not overwrite the merged
+  // headers object. Spreading opts last would replace headers entirely and
+  // silently drop the Authorization header, causing 401 on every call that
+  // passes its own headers option.
+  const { headers, ...rest } = opts;
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(opts.headers || {}) },
-    ...opts,
+    ...rest,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(headers || {}) },
   });
   const text = await res.text();
   let data = {};
@@ -824,8 +795,10 @@ async function api(path, opts = {}) {
     throw err;
   }
   if (res.status === 403) {
+    // Authenticated but lacking permission: this is NOT a session expiry, so
+    // it must not be treated as "unauthorized" (which would clear the token
+    // and force a re-login). Just surface the error to the caller.
     const err = new Error(data.error || 'forbidden');
-    err.unauthorized = true;
     throw err;
   }
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -896,11 +869,9 @@ async function loadStatus() {
     document.getElementById('stat-providers').textContent = provs.length;
     document.getElementById('m-total').textContent = s.total;
     document.getElementById('m-alive').textContent = s.alive;
-    let enabled = 0, tunnel = 0, ippool = 0;
-    provs.forEach(p => { if (p.enabled) enabled++; if (p.type === 'tunnel') tunnel++; else ippool++; });
+    let enabled = 0;
+    provs.forEach(p => { if (p.enabled) enabled++; });
     document.getElementById('m-enabled').textContent = enabled;
-    document.getElementById('m-tunnel').textContent = tunnel;
-    document.getElementById('m-ippool').textContent = ippool;
     document.getElementById('stat-api').textContent = '正常';
     document.getElementById('stat-api').className = 'green';
   } catch (e) {
@@ -916,6 +887,53 @@ async function loadProviders() {
     defaultCheckURLs = (data.default_check_urls || []).map(d => ({ name: d.name || '', url: d.url || '', enabled: d.enabled !== false }));
     renderProviders();
   } catch (e) { toast('加载 Provider 失败: ' + e.message, true); }
+}
+
+async function loadMarket() {
+  try {
+    const data = await api('/api/v1/admin/providers/market');
+    state.market = data.providers || [];
+    renderMarket();
+  } catch (e) { state.market = []; renderMarket(); }
+}
+
+function renderMarket() {
+  const tb = document.getElementById('market-tbody');
+  if (!tb) return;
+  if (!state.market || !state.market.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty">暂无可添加的共享 Provider</td></tr>';
+    return;
+  }
+  const rows = state.market.map(p => {
+    const owner = (p.config && p.config.owner) || '';
+    const alive = p.alive || 0;
+    const total = p.total || 0;
+    return '<tr>' +
+      '<td class="mono"><b>' + esc(p.name) + '</b></td>' +
+      '<td>' + esc(p.type || '') + '</td>' +
+      '<td>' + esc(owner) + '</td>' +
+      '<td>' + alive + '/' + total + '</td>' +
+      '<td><button class="btn btn-sm btn-primary" data-name="' + esc(p.name) + '" onclick="subscribeProvider(this.dataset.name)">添加</button></td>' +
+    '</tr>';
+  }).join('');
+  tb.innerHTML = rows;
+}
+
+async function subscribeProvider(name) {
+  try {
+    await api('/api/v1/admin/providers/' + encodeURIComponent(name) + '/subscribe', { method: 'POST' });
+    toast('已添加「' + name + '」');
+    await refreshAll();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
+
+async function unsubscribeProvider(name) {
+  try {
+    if (!confirm('确认取消「' + name + '」？')) return;
+    await api('/api/v1/admin/providers/' + encodeURIComponent(name) + '/subscribe', { method: 'DELETE' });
+    toast('已取消「' + name + '」');
+    await refreshAll();
+  } catch (e) { toast('取消失败: ' + e.message, true); }
 }
 
 // ---- 本地隐藏共享 Provider ----
@@ -968,7 +986,7 @@ function renderProviders() {
   ordered.forEach(p => {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
-    const isOwn = admin || (owner !== '' && owner === me);
+    const isOwn = (currentMe === null) || (owner !== '' && owner === me);
     const canSeeFull = isOwn;
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
@@ -1001,16 +1019,14 @@ function renderProviders() {
       ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
         <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
         <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>`;
+    } else if (owner !== '') {
+      ops = `<button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="unsubscribeProvider(this.dataset.name)">取消订阅</button>`;
     } else {
-      ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="showProviderUsage(this.dataset.name)">使用</button>
-        <button class="btn btn-sm" data-name="${esc(p.name)}" onclick="hideProvider(this.dataset.name)">隐藏</button>`;
+      ops = '<span style="color:var(--muted);font-size:12px;">仅可使用</span>';
     }
 
     const detailMeta = canSeeFull
-      ? `${p.provider_type === 'free'
-          ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">采集 ${((p.config?.free?.refresh_interval_s) || 0)}s · 删≥${((p.config?.free?.delete_latency_ms) || 3000)}ms</div>`
-          : ''}
-        ${p.provider_type === 'ip_pool' || p.provider_type === 'sticky'
+      ? `${p.provider_type === 'ip_pool' || p.provider_type === 'sticky'
           ? `<div style="color:var(--muted);font-size:11px;margin-top:2px;">提取 ${((p.config?.ip_pool?.refresh_interval_s) || 0)}s</div>`
           : ''}`
       : '<div style="color:var(--muted);font-size:11px;margin-top:2px;">配置仅创建者可见</div>';
@@ -1306,12 +1322,14 @@ function renderGroups() {
     const owner = g.owner || '';
     const isGlobal = owner === '';
     const me = (currentMe && currentMe.name) || '';
-    const canEdit = isAdmin() || (owner && owner === me);
+    const canEdit = (currentMe === null) || (owner !== '' && owner === me);
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
+    const gwPort = (state.status && state.status.gateway_port) || window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+    const gwAddr = `${esc(g.username)}:${esc(g.password)}@${esc(window.location.hostname)}:${gwPort}`;
     const gwAuth = gwEnabled
-      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}" onclick="copyGateway(this)">复制</button></div>`
+      ? `<div class="group-gw"><span class="gw-label">网关地址</span><code>${gwAddr}</code> <button class="btn btn-sm" data-gw="${gwAddr}" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
     const rows = (g.tiers || []).map((t, ti) => {
       const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti - 1]?.providers || []);
@@ -1337,7 +1355,6 @@ function renderGroups() {
         <div class="group-title">
           <span class="mono group-name">${esc(g.group)}</span>
           ${ownerTag}
-          ${g.type ? `<span class="badge kind">${esc(g.type)}</span>` : ''}
           ${regionBadges}
           <span class="badge ${gwEnabled ? 'on' : 'off'}">${gwEnabled ? '网关已启用' : '网关未启用'}</span>
         </div>
@@ -1382,8 +1399,6 @@ function openGroupModal(name) {
   gPrimaryWeights = {};
   gPrimaryLocked = {};
   document.getElementById('group-modal-title').textContent = '新增分组';
-  document.getElementById('g-name').value = '';
-  document.getElementById('g-type').value = '';
   document.getElementById('g-min-ratio').value = 0;
   document.getElementById('g-username').value = '';
   document.getElementById('g-password').value = '';
@@ -1397,10 +1412,8 @@ function openGroupModal(name) {
   if (g) {
     editingGroup = g.group;
     document.getElementById('group-modal-title').textContent = '编辑分组 ' + g.group;
-    document.getElementById('g-name').value = g.group;
-    document.getElementById('g-type').value = g.type || '';
     document.getElementById('g-min-ratio').value = g.min_alive_ratio ?? 0;
-    document.getElementById('g-username').value = g.username || '';
+    document.getElementById('g-username').value = g.username || g.group || '';
     document.getElementById('g-password').value = g.password || '';
     renderRegionCountryChecks(g.regions || []);
     (g.regions || []).forEach(r => {
@@ -1675,8 +1688,8 @@ function closeGroupModal() {
 }
 
 async function submitGroup() {
-  const name = document.getElementById('g-name').value.trim();
-  if (!name) { toast('分组名称必填', true); return; }
+  const name = document.getElementById('g-username').value.trim();
+  if (!name) { toast('网关用户名（即分组名称）必填', true); return; }
 
   const primary = [];
   document.querySelectorAll('#g-primary-pick input[type=checkbox]:checked').forEach(cb => primary.push(cb.value));
@@ -1707,17 +1720,11 @@ async function submitGroup() {
   const regions = [];
   document.querySelectorAll('#g-regions input[type=checkbox]:checked, #g-region-countries input[type=checkbox]:checked').forEach(cb => regions.push(cb.value));
 
-  const username = document.getElementById('g-username').value.trim();
   const password = document.getElementById('g-password').value;
-  if ((username && !password) || (!username && password)) {
-    toast('网关用户名与密码必须成对配置（或都留空）', true);
-    return;
-  }
   const body = {
     name,
-    type: document.getElementById('g-type').value,
     min_alive_ratio: parseFloat(document.getElementById('g-min-ratio').value) || 0,
-    username,
+    username: name,
     password,
     primary,
     primary_weights,
@@ -1896,7 +1903,7 @@ function renderUsage() {
 }
 
 async function refreshAll() {
-  await Promise.allSettled([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
+  await Promise.allSettled([loadStatus(), loadProviders(), loadMarket(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
 }
 
 async function toggleProvider(name, enabled) {
@@ -2018,14 +2025,6 @@ function openEditProvider(name) {
   document.getElementById('p-extract-user').value = ip.username || '';
   document.getElementById('p-extract-pass').value = ip.password || '';
 
-  const fr = cfg.free || {};
-  document.getElementById('p-free-feed').value = fr.feed_url || '';
-  document.getElementById('p-free-refresh').value = fr.refresh_interval_s || 600;
-  document.getElementById('p-free-max-speed').value = fr.max_speed_ms || 3000;
-  document.getElementById('p-free-delete-latency').value = fr.delete_latency_ms || 3000;
-  document.getElementById('p-free-expire').value = fr.expire_after_s || 0;
-  document.getElementById('p-free-max-proxies').value = fr.max_proxies || 0;
-
   toggleTunnelFields();
 
   // 无公开共享开关：公开共享通过列表的「共享」列开关开启
@@ -2042,7 +2041,6 @@ function toggleTunnelFields() {
   const usePool = type === 'ip_pool' || type === 'sticky';
   document.getElementById('ippool-fields').style.display = usePool ? '' : 'none';
   document.getElementById('p-sticky-row').style.display = type === 'sticky' ? '' : 'none';
-  document.getElementById('free-fields').style.display = type === 'free' ? '' : 'none';
 }
 
 // ---- 测试 URL 编辑 ----
@@ -2121,16 +2119,6 @@ async function submitProvider() {
       password: document.getElementById('p-tunnel-pass').value.trim(),
     };
     if (!body.tunnel.gateway) { toast('网关地址不能为空', true); return; }
-  } else if (type === 'free') {
-    body.free = {
-      feed_url: document.getElementById('p-free-feed').value.trim(),
-      refresh_interval_s: parseInt(document.getElementById('p-free-refresh').value) || 600,
-      max_speed_ms: parseInt(document.getElementById('p-free-max-speed').value) || 3000,
-      delete_latency_ms: parseInt(document.getElementById('p-free-delete-latency').value) || 3000,
-      expire_after_s: parseInt(document.getElementById('p-free-expire').value) || 0,
-      max_proxies: parseInt(document.getElementById('p-free-max-proxies').value) || 0,
-    };
-    if (!body.free.feed_url) { toast('免费源 feed_url 不能为空', true); return; }
   } else {
     body.ip_pool = {
       extract_url: document.getElementById('p-extract-url').value.trim(),
@@ -2246,13 +2234,13 @@ const APIDOC_ENDPOINTS = [
   {
     method: 'GET', path: '/api/v1/proxy', auth: 'token', title: '取一个代理',
     params: [
-      { name: 'group', type: 'string', req: false, desc: '调度分组名（如 charlespikachu-free），缺省用第一个分组', in: 'query' },
+      { name: 'group', type: 'string', req: false, desc: '调度分组名（如 residential），缺省用第一个分组', in: 'query' },
       { name: 'sticky_seconds', type: 'integer', req: false, desc: '>0 时开启粘性会话，同 client_id 在此时长内复用同一 IP', in: 'query' },
       { name: 'client_id', type: 'string', req: false, desc: '爬虫客户端标识，配合 sticky_seconds 使用', in: 'query' },
     ], body: '',
-    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxy?group=charlespikachu-free"',
-    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxy",\n    params={"group": "charlespikachu-free"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
-    response: '{\n  "ok": true,\n  "proxy": {\n    "id": "charlespikachu-free:1.2.3.4:8080",\n    "scheme": "http",\n    "host": "1.2.3.4",\n    "port": 8080,\n    "provider": "charlespikachu-free",\n    "type": "free",\n    "addr": "1.2.3.4:8080"\n  }\n}',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxy?group=free-via-api"',
+    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxy",\n    params={"group": "free-via-api"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "proxy": {\n    "id": "free-via-api:1.2.3.4:8080",\n    "scheme": "http",\n    "host": "1.2.3.4",\n    "port": 8080,\n    "provider": "free-via-api",\n    "type": "ip_pool",\n    "addr": "1.2.3.4:8080"\n  }\n}',
     resp_fields: [
       { name: 'ok', type: 'boolean', desc: '是否成功' },
       { name: 'proxy.id', type: 'string', desc: '代理 ID（含 provider 前缀），上报时作为 {id} 使用' },
@@ -2260,7 +2248,7 @@ const APIDOC_ENDPOINTS = [
       { name: 'proxy.host', type: 'string', desc: '代理 IP 或域名' },
       { name: 'proxy.port', type: 'integer', desc: '端口' },
       { name: 'proxy.provider', type: 'string', desc: '所属 Provider 名称' },
-      { name: 'proxy.type', type: 'string', desc: '代理类型，free 或 tunnel' },
+      { name: 'proxy.type', type: 'string', desc: '代理类型，tunnel 或 ip_pool' },
       { name: 'proxy.addr', type: 'string', desc: 'host:port 组合地址' },
     ],
   },
@@ -2270,9 +2258,9 @@ const APIDOC_ENDPOINTS = [
       { name: 'count', type: 'integer', req: false, desc: '数量（1~100，默认 1）', in: 'query' },
       { name: 'group', type: 'string', req: false, desc: '调度分组名，缺省用第一个分组', in: 'query' },
     ], body: '',
-    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxies?count=5&group=charlespikachu-free"',
-    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxies",\n    params={"count": 5, "group": "charlespikachu-free"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
-    response: '{\n  "ok": true,\n  "proxies": [\n    {"id": "charlespikachu-free:1.2.3.4:8080", "scheme": "http", "host": "1.2.3.4", "port": 8080, "type": "free", "addr": "1.2.3.4:8080"}\n  ]\n}',
+    curl: 'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxies?count=5&group=free-via-api"',
+    py: 'import requests\n\nr = requests.get(\n    "{HOST}/api/v1/proxies",\n    params={"count": 5, "group": "free-via-api"},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    response: '{\n  "ok": true,\n  "proxies": [\n    {"id": "free-via-api:1.2.3.4:8080", "scheme": "http", "host": "1.2.3.4", "port": 8080, "type": "ip_pool", "addr": "1.2.3.4:8080"}\n  ]\n}',
     resp_fields: [
       { name: 'ok', type: 'boolean', desc: '是否成功' },
       { name: 'proxies', type: 'array<object>', desc: '代理对象数组，字段与 /api/v1/proxy 的 proxy 一致' },
@@ -2286,8 +2274,8 @@ const APIDOC_ENDPOINTS = [
       { name: 'latency_ms', type: 'integer', req: false, desc: '本次请求延迟毫秒数', in: 'body' },
     ],
     body: '{"success":true,"latency_ms":120}',
-    curl: 'curl -X POST "{HOST}/api/v1/proxy/charlespikachu-free:1.2.3.4:8080/report" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"success":true,"latency_ms":120}\'',
-    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/proxy/charlespikachu-free:1.2.3.4:8080/report",\n    json={"success": True, "latency_ms": 120},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    curl: 'curl -X POST "{HOST}/api/v1/proxy/free-via-api:1.2.3.4:8080/report" \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"success":true,"latency_ms":120}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/proxy/free-via-api:1.2.3.4:8080/report",\n    json={"success": True, "latency_ms": 120},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
@@ -2297,9 +2285,9 @@ const APIDOC_ENDPOINTS = [
       { name: 'id', type: 'string', req: true, desc: '代理 ID（取代理响应中的 id 字段）', in: 'body' },
       { name: 'success', type: 'boolean', req: true, desc: '本次使用是否成功', in: 'body' },
       { name: 'latency_ms', type: 'integer', req: false, desc: '本次请求延迟毫秒数', in: 'body' },
-    ], body: '{"id":"charlespikachu-free:1.2.3.4:8080","success":false,"latency_ms":3000}',
-    curl: 'curl -X POST {HOST}/api/v1/feedback \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"id":"charlespikachu-free:1.2.3.4:8080","success":false,"latency_ms":3000}\'',
-    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/feedback",\n    json={"id": "charlespikachu-free:1.2.3.4:8080", "success": False, "latency_ms": 3000},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    ], body: '{"id":"free-via-api:1.2.3.4:8080","success":false,"latency_ms":3000}',
+    curl: 'curl -X POST {HOST}/api/v1/feedback \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"id":"free-via-api:1.2.3.4:8080","success":false,"latency_ms":3000}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/feedback",\n    json={"id": "free-via-api:1.2.3.4:8080", "success": False, "latency_ms": 3000},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
@@ -2308,14 +2296,14 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/status',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/status", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "ok": true,\n  "total": 60,\n  "alive": 39,\n  "by_provider": {"providers": [{"provider": "charlespikachu-free", "type": "free", "total": 60, "alive": 39}]},\n  "groups": [{"group": "charlespikachu-free", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "usable": true}]}]\n}',
+    response: '{\n  "ok": true,\n  "total": 60,\n  "alive": 39,\n  "by_provider": {"providers": [{"provider": "free-via-api", "type": "ip_pool", "total": 60, "alive": 39}]},\n  "groups": [{"group": "free-via-api", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "usable": true}]}]\n}',
     resp_fields: [
       { name: 'ok', type: 'boolean', desc: '是否成功' },
       { name: 'total', type: 'integer', desc: '代理总数' },
       { name: 'alive', type: 'integer', desc: '存活代理数' },
       { name: 'by_provider.providers', type: 'array<object>', desc: '按 Provider 汇总的存活统计' },
       { name: 'providers[].provider', type: 'string', desc: 'Provider 名称' },
-      { name: 'providers[].type', type: 'string', desc: 'Provider 类型，free 或 tunnel' },
+      { name: 'providers[].type', type: 'string', desc: 'Provider 类型，tunnel 或 ip_pool' },
       { name: 'providers[].total', type: 'integer', desc: '该 Provider 代理总数' },
       { name: 'providers[].alive', type: 'integer', desc: '该 Provider 存活数' },
       { name: 'groups', type: 'array<object>', desc: '各调度分组的分层存活状态' },
@@ -2342,12 +2330,12 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/providers',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/providers", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "providers": [\n    {"name": "charlespikachu-free", "type": "free", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ],\n  "default_check_urls": [\n    {"name": "ipapi-cc", "url": "http://ip-api.com/line/?fields=countryCode", "enabled": true}\n  ]\n}',
+    response: '{\n  "providers": [\n    {"name": "free-via-api", "type": "ip_pool", "provider_type": "free", "enabled": true, "check_interval_s": 60, "total": 60, "alive": 39}\n  ],\n  "default_check_urls": [\n    {"name": "ipapi-cc", "url": "http://ip-api.com/line/?fields=countryCode", "enabled": true}\n  ]\n}',
     resp_fields: [
       { name: 'providers', type: 'array<object>', desc: 'Provider 列表' },
       { name: 'providers[].name', type: 'string', desc: 'Provider 名称' },
-      { name: 'providers[].type', type: 'string', desc: '类型，free 或 tunnel' },
-      { name: 'providers[].provider_type', type: 'string', desc: 'Provider 类型：tunnel / ip_pool / sticky / free' },
+      { name: 'providers[].type', type: 'string', desc: '类型，tunnel 或 ip_pool' },
+      { name: 'providers[].provider_type', type: 'string', desc: 'Provider 类型：tunnel / ip_pool / sticky' },
       { name: 'providers[].enabled', type: 'boolean', desc: '是否启用' },
       { name: 'providers[].check_interval_s', type: 'integer', desc: '检测频率（秒），0 表示用全局 health_check.interval_s' },
       { name: 'providers[].total', type: 'integer', desc: '代理总数' },
@@ -2359,7 +2347,7 @@ const APIDOC_ENDPOINTS = [
     method: 'POST', path: '/api/v1/admin/providers', auth: 'admin', title: '新增 Provider',
     params: [
       { name: 'name', type: 'string', req: true, desc: 'Provider 名称', in: 'body' },
-      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
+      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky', in: 'body' },
       { name: 'enabled', type: 'boolean', req: false, desc: '是否启用，默认 true', in: 'body' },
       { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
       { name: 'check_urls', type: 'array<object>', req: false, desc: '测试 URL 列表 [{name,url,enabled}]，含全局默认快照与自定义；任一启用的 URL 可达即判定存活。全部禁用或未配置时回退全局默认', in: 'body' },
@@ -2374,7 +2362,7 @@ const APIDOC_ENDPOINTS = [
     method: 'PUT', path: '/api/v1/admin/providers/{name}', auth: 'admin', title: '编辑 Provider（更新已添加的配置）',
     params: [
       { name: '{name}', type: 'string', req: true, desc: 'Provider 名称（路径中指定，不可改名）', in: 'path' },
-      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky / free', in: 'body' },
+      { name: 'type', type: 'string', req: true, desc: '类型：tunnel / ip_pool / sticky', in: 'body' },
       { name: 'enabled', type: 'boolean', req: false, desc: '是否启用', in: 'body' },
       { name: 'check_interval_s', type: 'integer', req: false, desc: '检测频率（秒），0=用全局 health_check.interval_s', in: 'body' },
       { name: 'check_urls', type: 'array<object>', req: false, desc: '测试 URL 列表 [{name,url,enabled}]，覆盖原有测试 URL', in: 'body' },
@@ -2397,8 +2385,8 @@ const APIDOC_ENDPOINTS = [
   {
     method: 'POST', path: '/api/v1/admin/providers/{name}/refresh', auth: 'admin', title: '立即刷新采集',
     params: [{ name: '{name}', type: 'string', req: true, desc: 'Provider 名称', in: 'path' }], body: '',
-    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/charlespikachu-free/refresh"',
-    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers/charlespikachu-free/refresh",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    curl: 'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/free-via-api/refresh"',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/providers/free-via-api/refresh",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
@@ -2423,12 +2411,12 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/proxies',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/proxies", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "proxies": [\n    {"id": "charlespikachu-free:1.2.3.4:8080", "addr": "1.2.3.4:8080", "kind": "free", "provider": "charlespikachu-free", "alive": true, "latency_ms": 120, "weight": 1, "free": true}\n  ]\n}',
+    response: '{\n  "proxies": [\n    {"id": "free-via-api:1.2.3.4:8080", "addr": "1.2.3.4:8080", "kind": "free", "provider": "free-via-api", "alive": true, "latency_ms": 120, "weight": 1, "free": true}\n  ]\n}',
     resp_fields: [
       { name: 'proxies', type: 'array<object>', desc: '代理明细列表' },
       { name: 'proxies[].id', type: 'string', desc: '代理 ID（含 provider 前缀）' },
       { name: 'proxies[].addr', type: 'string', desc: 'host:port 地址' },
-      { name: 'proxies[].kind', type: 'string', desc: '代理类型，free 或 tunnel' },
+      { name: 'proxies[].kind', type: 'string', desc: '代理类型，tunnel 或 ip_pool' },
       { name: 'proxies[].provider', type: 'string', desc: '所属 Provider' },
       { name: 'proxies[].alive', type: 'boolean', desc: '是否存活' },
       { name: 'proxies[].latency_ms', type: 'integer', desc: '当前延迟毫秒数，-1 表示未知' },
@@ -2439,8 +2427,8 @@ const APIDOC_ENDPOINTS = [
   {
     method: 'DELETE', path: '/api/v1/admin/proxies/{id}', auth: 'admin', title: '删除单个代理',
     params: [{ name: '{id}', type: 'string', req: true, desc: '代理 ID', in: 'path' }], body: '',
-    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/proxies/charlespikachu-free:1.2.3.4:8080"',
-    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/proxies/charlespikachu-free:1.2.3.4:8080",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    curl: 'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/proxies/free-via-api:1.2.3.4:8080"',
+    py: 'import requests\n\nr = requests.delete(\n    "{HOST}/api/v1/admin/proxies/free-via-api:1.2.3.4:8080",\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
@@ -2457,11 +2445,10 @@ const APIDOC_ENDPOINTS = [
     params: [], body: '',
     curl: 'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/groups',
     py: 'import requests\n\nr = requests.get("{HOST}/api/v1/admin/groups", headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.json())',
-    response: '{\n  "groups": [\n    {"group": "residential", "type": "static", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "min_alive_ratio": 0.5, "usable": true}], "primary": ["mock-sticky", "mock-ippool"], "primary_weights": {"mock-sticky": 2, "mock-ippool": 1}, "backups": [], "min_alive_ratio": 0.5, "username": "residential"}\n  ]\n}',
+    response: '{\n  "groups": [\n    {"group": "residential", "tiers": [{"name": "primary", "alive_count": 39, "alive_total": 60, "min_alive_ratio": 0.5, "usable": true}], "primary": ["mock-sticky", "mock-ippool"], "primary_weights": {"mock-sticky": 2, "mock-ippool": 1}, "backups": [], "min_alive_ratio": 0.5, "username": "residential"}\n  ]\n}',
     resp_fields: [
       { name: 'groups', type: 'array<object>', desc: '分组列表' },
       { name: 'groups[].group', type: 'string', desc: '分组名' },
-      { name: 'groups[].type', type: 'string', desc: '分组类型' },
       { name: 'groups[].tiers', type: 'array<object>', desc: '该分组各层状态' },
       { name: 'tiers[].name', type: 'string', desc: '层名，如 primary 或备用池名' },
       { name: 'tiers[].alive_count', type: 'integer', desc: '该层存活数' },
@@ -2478,8 +2465,7 @@ const APIDOC_ENDPOINTS = [
   {
     method: 'POST', path: '/api/v1/admin/groups', auth: 'admin', title: '新增调度分组（热生效）',
     params: [
-      { name: 'name', type: 'string', req: true, desc: '分组名（唯一）', in: 'body' },
-      { name: 'type', type: 'string', req: false, desc: '分组类型，如 static/free/tunnel', in: 'body' },
+      { name: 'name', type: 'string', req: true, desc: '分组名（唯一，等于网关用户名）', in: 'body' },
       { name: 'min_alive_ratio', type: 'number', req: false, desc: '主池存活率阈值（0~1），默认 0', in: 'body' },
       { name: 'username', type: 'string', req: false, desc: '网关用户名（可空；配置后可用代理网关走本组）', in: 'body' },
       { name: 'password', type: 'string', req: false, desc: '网关密码', in: 'body' },
@@ -2539,9 +2525,9 @@ const APIDOC_ENDPOINTS = [
       { name: 'role', type: 'string', req: true, desc: '角色，admin 或 user', in: 'body' },
       { name: 'groups', type: 'array<string>', req: false, desc: '可用的调度分组名列表', in: 'body' },
       { name: 'enabled', type: 'boolean', req: false, desc: '是否启用，默认 true', in: 'body' },
-    ], body: '{"name":"spider01","password":"pass123","role":"user","groups":["charlespikachu-free"],"enabled":true}',
-    curl: 'curl -X POST {HOST}/api/v1/admin/accounts \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123","role":"user","groups":["charlespikachu-free"],"enabled":true}\'',
-    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/accounts",\n    json={"name": "spider01", "password": "pass123", "role": "user", "groups": ["charlespikachu-free"], "enabled": True},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
+    ], body: '{"name":"spider01","password":"pass123","role":"user","groups":["free-via-api"],"enabled":true}',
+    curl: 'curl -X POST {HOST}/api/v1/admin/accounts \\\n  -H "Authorization: Bearer {TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123","role":"user","groups":["free-via-api"],"enabled":true}\'',
+    py: 'import requests\n\nr = requests.post(\n    "{HOST}/api/v1/admin/accounts",\n    json={"name": "spider01", "password": "pass123", "role": "user", "groups": ["free-via-api"], "enabled": True},\n    headers={"Authorization": "Bearer {TOKEN}"},\n)\nprint(r.json())',
     response: '{\n  "ok": true\n}',
     resp_fields: [{ name: 'ok', type: 'boolean', desc: '是否成功' }],
   },
