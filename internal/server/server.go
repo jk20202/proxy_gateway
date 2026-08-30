@@ -6,9 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +77,7 @@ type Server struct {
 	gateway      *gateway.Gateway
 	gwHandler    fasthttp.RequestHandler
 	db           *persist.MySQL
+	freeAPI      config.FreeAPIConfig
 }
 
 func New(cfg config.Config, mgr *pool.Manager, checker *health.Checker, logger *slog.Logger) *Server {
@@ -84,6 +89,7 @@ func New(cfg config.Config, mgr *pool.Manager, checker *health.Checker, logger *
 		checker: checker,
 		emitter: mgr.AlertEmit,
 		groups:  cfg.Groups,
+		freeAPI: cfg.FreeAPI,
 	}
 }
 
@@ -165,6 +171,9 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		{"POST", "/api/v1/admin/providers", s.handleAddProvider},
 		{"DELETE", "/api/v1/admin/providers", s.handleRemoveProvider},
 		{"PUT", "/api/v1/admin/providers/{name}", s.handleUpdateProvider},
+		// /market, /subscribe, /unsubscribe are dispatched by
+		// handleProviderAction since they live under the providers prefix
+		// and share routing/ownership logic.
 		{"GET", "/api/v1/admin/proxies", s.handleListProxies},
 		{"POST", "/api/v1/admin/health/check", s.handleHealthCheck},
 		{"GET", "/api/v1/admin/groups", s.handleListGroups},
@@ -190,12 +199,17 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 	indexHTML, _ := webFS.ReadFile("web/index.html")
 	indexHandler := func(ctx *fasthttp.RequestCtx) {
 		ctx.SetContentType("text/html; charset=utf-8")
+		// no-cache: the console HTML is embedded at build time, so a stale
+		// browser cache would keep running the old (possibly buggy) JS after a
+		// redeploy. Revalidate on every load.
+		ctx.Response.Header.Set("Cache-Control", "no-cache")
 		ctx.SetBody(indexHTML)
 	}
 
 	loginHTML, _ := webFS.ReadFile("web/login.html")
 	loginHandler := func(ctx *fasthttp.RequestCtx) {
 		ctx.SetContentType("text/html; charset=utf-8")
+		ctx.Response.Header.Set("Cache-Control", "no-cache")
 		ctx.SetBody(loginHTML)
 	}
 
@@ -241,6 +255,15 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 			return
 		}
 
+		// On-demand free-proxy collection endpoint. Providers consume it as an
+		// ip_pool extract_url, so scraping happens only when the pool pulls.
+		// It sits before the admin auth gate: extract_url calls carry no bearer
+		// token, and the optional free_api.token guards it instead.
+		if method == "GET" && path == "/api/v1/free-proxies" {
+			s.handleFreeProxies(ctx)
+			return
+		}
+
 		if method == "POST" && strings.HasPrefix(path, "/api/v1/proxy/") && strings.HasSuffix(path, "/report") {
 			if !s.authorize(ctx, false) {
 				return
@@ -261,14 +284,17 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		if strings.HasPrefix(path, "/api/v1/admin/") {
 			// Provider / group management is available to any authenticated
 			// account; ownership checks inside each handler restrict what a
-			// non-admin may read or mutate. The proxy list stays admin-only
-			// because it exposes every proxy IP and credential, which must not
-			// leak to regular users.
+			// non-admin may read or mutate. The proxy list is per-account
+			// (filtered to the requesting user's own + subscribed providers)
+			// so it is also available to regular users. accounts/usage/alerts
+			// stay admin-only.
 			adminOnly := true
 			switch {
 			case strings.HasPrefix(path, "/api/v1/admin/providers"):
 				adminOnly = false
 			case strings.HasPrefix(path, "/api/v1/admin/groups"):
+				adminOnly = false
+			case strings.HasPrefix(path, "/api/v1/admin/proxies"):
 				adminOnly = false
 			}
 			if !s.authorize(ctx, adminOnly) {
@@ -373,33 +399,25 @@ func (s *Server) isAdminUser(ctx *fasthttp.RequestCtx) bool {
 	return acct != nil && acct.IsAdmin()
 }
 
-// providerVisible reports whether the account may see a provider: admins see
-// everything; a global provider (Owner="") is visible to everyone while it is
-// marked Public (admin can switch it off to hide it from regular users);
-// otherwise the provider must be owned by the account or marked public.
+// providerVisible reports whether the account may see the provider. Providers
+// are strictly scoped to their owner: an account only sees providers it owns
+// or has subscribed to from the shared market. Admins have no special
+// visibility here — every account (including admins) manages only its own
+// providers. Browse-the-market is its own endpoint (handleListMarket).
 func (s *Server) providerVisible(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
-	if s.isAdminUser(ctx) {
+	acct := currentAccountObj(ctx)
+	if acct == nil {
 		return true
 	}
-	acct := currentAccount(ctx)
-	if acct == "" {
+	if cfg.Owner == acct.Name {
 		return true
 	}
-	if cfg.Owner == "" {
-		return cfg.Public
-	}
-	if cfg.Owner == acct {
-		return true
-	}
-	return cfg.Public
+	return acct.IsSubscribed(cfg.Name)
 }
 
-// providerWritable reports whether the account may mutate a provider: admins
-// may mutate anything, others only their own providers.
+// providerWritable reports whether the account may mutate a provider. Only the
+// owner may; admins have no override so each account fully owns its providers.
 func (s *Server) providerWritable(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
-	if s.isAdminUser(ctx) {
-		return true
-	}
 	acct := currentAccount(ctx)
 	if acct == "" {
 		return true
@@ -408,12 +426,8 @@ func (s *Server) providerWritable(ctx *fasthttp.RequestCtx, cfg config.ProviderC
 }
 
 // groupVisible reports whether the account may see/use a group. Groups are
-// private by design: a regular user only ever sees groups they own. Global
-// groups (Owner="") are managed by admins and visible to admins only.
+// private: an account only ever sees groups it owns. Admins have no override.
 func (s *Server) groupVisible(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
-	if s.isAdminUser(ctx) {
-		return true
-	}
 	acct := currentAccount(ctx)
 	if acct == "" {
 		return true
@@ -421,18 +435,14 @@ func (s *Server) groupVisible(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool 
 	return g.Owner == acct
 }
 
-// groupWritable reports whether the account may mutate a group: admins may
-// mutate any group, others only their own private groups. Global groups are
-// managed exclusively by admins.
+// groupWritable reports whether the account may mutate a group. Only the owner
+// may; admins have no override.
 func (s *Server) groupWritable(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
-	if s.isAdminUser(ctx) {
-		return true
-	}
 	acct := currentAccount(ctx)
 	if acct == "" {
 		return true
 	}
-	return g.Owner != "" && g.Owner == acct
+	return g.Owner == acct
 }
 
 // findGroup returns the group with the given name.
@@ -445,6 +455,94 @@ func (s *Server) findGroup(name string) (config.GroupCfg, bool) {
 		}
 	}
 	return config.GroupCfg{}, false
+}
+
+// relatedProviders returns the set of provider names visible to the current
+// account: the union of "providers I own" and "providers I have subscribed to
+// from the shared market". Admins are treated identically to regular users
+// here. The second return value is the same set as a slice (deterministic
+// order for callers that need to iterate or display).
+func (s *Server) relatedProviders(ctx *fasthttp.RequestCtx) (map[string]struct{}, []string) {
+	all := s.mgr.ProviderList()
+	acct := currentAccountObj(ctx)
+	if acct == nil {
+		// Auth disabled: fall back to all providers.
+		out := make(map[string]struct{}, len(all))
+		names := make([]string, 0, len(all))
+		for _, p := range all {
+			out[p.Config.Name] = struct{}{}
+			names = append(names, p.Config.Name)
+		}
+		return out, names
+	}
+	out := make(map[string]struct{}, len(all))
+	names := make([]string, 0, len(all))
+	for _, p := range all {
+		if p.Config.Owner == acct.Name || acct.IsSubscribed(p.Config.Name) {
+			out[p.Config.Name] = struct{}{}
+			names = append(names, p.Config.Name)
+		}
+	}
+	return out, names
+}
+
+// providerSetMembership reports whether name is part of the account's visible
+// provider set. The account must own or be subscribed to name; admins have no
+// override.
+func (s *Server) providerSetMembership(ctx *fasthttp.RequestCtx, name string) bool {
+	acct := currentAccountObj(ctx)
+	if acct == nil {
+		return true
+	}
+	cfg, ok := s.mgr.ProviderConfig(name)
+	if !ok {
+		return false
+	}
+	if cfg.Owner == acct.Name {
+		return true
+	}
+	return acct.IsSubscribed(name)
+}
+
+// relatedGroupProviders returns the providers a group can actually pull from
+// given the requesting account's visibility: each provider in primary/backup
+// must be in the user's related set, otherwise it's filtered out. The filtered
+// group config is returned alongside the trimmed primary list so callers can
+// skip obviously empty groups.
+func (s *Server) relatedGroupProviders(ctx *fasthttp.RequestCtx, g config.GroupCfg) (config.GroupCfg, map[string]struct{}) {
+	set, _ := s.relatedProviders(ctx)
+	trimmed := g
+	trimmed.Primary = filterAllowed(g.Primary, set)
+	if len(trimmed.Primary) == 0 {
+		// group empty under this account; drop backup layers entirely so it
+		// doesn't appear as a usable group.
+		trimmed.Backups = nil
+		return trimmed, set
+	}
+	allowedBackups := make([]config.BackupPool, 0, len(g.Backups))
+	for _, b := range g.Backups {
+		kept := filterAllowed(b.Providers, set)
+		if len(kept) == 0 {
+			continue
+		}
+		b.Providers = kept
+		allowedBackups = append(allowedBackups, b)
+	}
+	trimmed.Backups = allowedBackups
+	return trimmed, set
+}
+
+func filterAllowed(names []string, set map[string]struct{}) []string {
+	if len(names) == 0 {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if _, ok := set[n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // requireOwnedGroup resolves a group by name and verifies the requesting
@@ -534,8 +632,13 @@ func (s *Server) handleGetProxy(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "group not allowed for account"})
 		return
 	}
+	// Subscription-based visibility: only pull from providers the account
+	// owns or has subscribed to. groupAllowed already enforces group
+	// ownership; this set further restricts the underlying pool to providers
+	// the account can actually use.
+	set, _ := s.relatedProviders(ctx)
 	if sticky > 0 && clientID != "" {
-		pr := s.pool.StickyNext(clientID, sticky, group)
+		pr := s.pool.StickyNextForProviders(clientID, sticky, group, set)
 		if pr == nil {
 			s.emitPoolExhausted()
 			s.recordCall(acct, group, "", "", "", false)
@@ -555,9 +658,9 @@ func (s *Server) handleGetProxy(ctx *fasthttp.RequestCtx) {
 	}
 	var pr *model.Proxy
 	if group != "" {
-		pr = s.pool.NextInGroup(group)
+		pr = s.pool.NextInGroupForProviders(group, set)
 	} else {
-		pr = s.pool.Next()
+		pr = s.pool.NextForProviders(set)
 	}
 	if pr == nil {
 		s.emitPoolExhausted()
@@ -592,15 +695,16 @@ func (s *Server) handleGetProxies(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "group not allowed for account"})
 		return
 	}
+	set, _ := s.relatedProviders(ctx)
 
 	exclude := make(map[string]struct{}, n)
 	out := make([]proxyResponse, 0, n)
 	for range n {
 		var pr *model.Proxy
 		if group != "" {
-			pr = s.pool.NextInGroupExcluding(group, exclude)
+			pr = s.pool.NextInGroupExcludingForProviders(group, set, exclude)
 		} else {
-			pr = s.pool.NextExcluding(exclude)
+			pr = s.pool.NextExcludingForProviders(set, exclude)
 		}
 		if pr == nil {
 			break
@@ -687,19 +791,35 @@ func (s *Server) handleHealthz(ctx *fasthttp.RequestCtx) {
 	_, _ = ctx.WriteString("ok")
 }
 
+// gatewayPort returns the port the HTTP proxy gateway listens on (gateway_listen
+// if set, otherwise the console listen port in merged mode). Empty when no
+// gateway is configured.
+func (s *Server) gatewayPort() string {
+	addr := s.cfg.GatewayListen
+	if addr == "" {
+		addr = s.cfg.Listen
+	}
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[i+1:]
+	}
+	return addr
+}
+
 func (s *Server) handleStatus(ctx *fasthttp.RequestCtx) {
-	total, alive := s.pool.Stats()
-	byProvider := s.providerStats()
+	set, _ := s.relatedProviders(ctx)
+	total, alive := s.pool.StatsForProviders(set)
+	byProvider := s.providerStats(set)
 	writeJSON(ctx, fasthttp.StatusOK, map[string]any{
-		"ok":          true,
-		"total":       total,
-		"alive":       alive,
-		"by_provider": byProvider,
-		"groups":      s.pool.GroupStats(),
+		"ok":           true,
+		"total":        total,
+		"alive":        alive,
+		"by_provider":  byProvider,
+		"groups":       s.pool.GroupStatsForProviders(set),
+		"gateway_port": s.gatewayPort(),
 	})
 }
 
-func (s *Server) providerStats() map[string]any {
+func (s *Server) providerStats(set map[string]struct{}) map[string]any {
 	type stat struct {
 		Provider      string  `json:"provider"`
 		Type          string  `json:"type"`
@@ -718,6 +838,9 @@ func (s *Server) providerStats() map[string]any {
 	minRatioByProv := map[string]float64{}
 	stickyByProv := map[string]int{}
 	for _, pi := range s.mgr.ProviderList() {
+		if _, ok := set[pi.Name]; !ok {
+			continue
+		}
 		enabledByProv[pi.Name] = pi.Enabled
 		weightByProv[pi.Name] = pi.Weight
 		kindByProv[pi.Name] = pi.Type
@@ -727,7 +850,7 @@ func (s *Server) providerStats() map[string]any {
 	}
 	stats := make([]stat, 0, len(enabledByProv))
 	seen := map[string]bool{}
-	for _, ps := range s.pool.StatsByProvider() {
+	for _, ps := range s.pool.StatsByProviders(set) {
 		stats = append(stats, stat{
 			Provider:      ps.Provider,
 			Type:          kindByProv[ps.Provider],
@@ -778,12 +901,9 @@ func (s *Server) handleListProviders(ctx *fasthttp.RequestCtx) {
 }
 
 // providerCanSeeFullConfig reports whether the requesting account is allowed to
-// view the secret configuration (URLs / credentials) of a provider. Admins and
-// the owner always can; everyone else cannot (even for shared providers).
+// view the secret configuration (URLs / credentials) of a provider. Only the
+// owner can; everyone else (including admins) sees sanitized info.
 func (s *Server) providerCanSeeFullConfig(ctx *fasthttp.RequestCtx, cfg config.ProviderCfg) bool {
-	if s.isAdminUser(ctx) {
-		return true
-	}
 	acct := currentAccount(ctx)
 	if acct == "" {
 		return true
@@ -816,12 +936,10 @@ func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	// A non-admin can only create a provider owned by themselves. They may
-	// choose to share it publicly, but the owner is always themselves. Admin
-	// may create global providers (Owner="") or providers owned by any account.
-	if !s.isAdminUser(ctx) {
-		cfg.Owner = currentAccount(ctx)
-	}
+	// Every account (including admins) creates providers owned by themselves.
+	// The owner is forced to the requesting account; public sharing is a
+	// separate toggle the owner controls.
+	cfg.Owner = currentAccount(ctx)
 	if err := s.mgr.AddProvider(cfg); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -900,12 +1018,10 @@ func (s *Server) handleUpdateProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	// Preserve ownership on update: a non-admin must keep their own provider
-	// private to themselves, and may not transfer it or make it global. They
-	// may, however, flip the public-share flag.
-	if !s.isAdminUser(ctx) {
-		cfg.Owner = currentAccount(ctx)
-	}
+	// Preserve ownership on update: the owner is forced to the requesting
+	// account so nobody can transfer or globalise a provider. The public-share
+	// flag may still be toggled.
+	cfg.Owner = currentAccount(ctx)
 	if err := s.mgr.UpdateProvider(name, cfg); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -916,19 +1032,44 @@ func (s *Server) handleUpdateProvider(ctx *fasthttp.RequestCtx) {
 func (s *Server) handleProviderAction(ctx *fasthttp.RequestCtx, method, path string) bool {
 	rest := strings.TrimPrefix(path, "/api/v1/admin/providers/")
 	parts := strings.Split(rest, "/")
-	if len(parts) < 2 {
+	if len(parts) < 1 {
 		return false
 	}
 	name := parts[0]
 	if name == "" {
 		return false
 	}
-	// Every action (enable/disable/weight/refresh/priority) mutates the
-	// provider, so enforce ownership before dispatching.
+	// /api/v1/admin/providers/market: list public providers the account may
+	// subscribe to. The "name" in this case is literally "market", with no
+	// trailing action segment.
+	if name == "market" && (len(parts) < 2 || parts[1] == "") {
+		s.handleListMarket(ctx)
+		return true
+	}
+	if len(parts) < 2 {
+		return false
+	}
+	// /api/v1/admin/providers/{name}/subscribe: subscribe / unsubscribe to
+	// a shared provider. The requesting account is mutating their own
+	// subscription list, not the provider itself, so we skip ownership and
+	// instead validate the provider exists and is public.
+	action := parts[1]
+	if action == "subscribe" {
+		switch method {
+		case "POST":
+			s.handleSubscribeProvider(ctx, name)
+		case "DELETE":
+			s.handleUnsubscribeProvider(ctx, name)
+		default:
+			writeJSON(ctx, fasthttp.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+		return true
+	}
+	// Every other action (enable/disable/weight/refresh/priority/public) mutates
+	// the provider, so enforce ownership before dispatching.
 	if _, ok := s.requireOwnedProvider(ctx, name); !ok {
 		return true
 	}
-	action := parts[1]
 
 	switch action {
 	case "enable":
@@ -1019,8 +1160,102 @@ func (s *Server) handleProviderAction(ctx *fasthttp.RequestCtx, method, path str
 	return false
 }
 
+// handleListMarket returns the public providers visible in the shared market:
+// providers marked Public whose owner is not the requesting account and that
+// the account has not already subscribed to. Non-public providers and ones
+// already in the account's subscription list are excluded. Every account —
+// including admins — is treated equally here. Secret config fields are
+// stripped; market entries are browse-only.
+func (s *Server) handleListMarket(ctx *fasthttp.RequestCtx) {
+	acct := currentAccountObj(ctx)
+	out := make([]pool.ProviderInfo, 0)
+	for _, p := range s.mgr.ProviderList() {
+		if !p.Config.Public {
+			continue
+		}
+		if acct == nil {
+			continue
+		}
+		// Don't list the user's own providers in the market.
+		if p.Config.Owner == acct.Name {
+			continue
+		}
+		if acct.IsSubscribed(p.Config.Name) {
+			continue
+		}
+		out = append(out, sanitizeProviderInfo(p))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(ctx, fasthttp.StatusOK, map[string]any{"providers": out})
+}
+
+// handleSubscribeProvider adds name to the requesting account's subscription
+// list. The provider must exist, be marked Public, and not already be owned
+// by the account. Admin can subscribe to any public provider.
+func (s *Server) handleSubscribeProvider(ctx *fasthttp.RequestCtx, name string) {
+	cfg, ok := s.mgr.ProviderConfig(name)
+	if !ok {
+		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	if !cfg.Public {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "provider is not shared to the market"})
+		return
+	}
+	acct := currentAccountObj(ctx)
+	if acct == nil {
+		writeJSON(ctx, fasthttp.StatusUnauthorized, map[string]string{"error": "auth required"})
+		return
+	}
+	if cfg.Owner == acct.Name {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "cannot subscribe to a provider you already own"})
+		return
+	}
+	if acct.IsSubscribed(name) {
+		writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true, "already": true})
+		return
+	}
+	subs := append([]string{}, acct.Subscriptions...)
+	subs = append(subs, name)
+	if err := s.auth.UpdateSubscriptions(acct.Name, subs); err != nil {
+		writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	acct.Subscriptions = subs
+	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleUnsubscribeProvider removes name from the requesting account's
+// subscription list. The provider is unaffected: subsequent proxies/stats/
+// group views for this account will no longer include the provider.
+func (s *Server) handleUnsubscribeProvider(ctx *fasthttp.RequestCtx, name string) {
+	acct := currentAccountObj(ctx)
+	if acct == nil {
+		writeJSON(ctx, fasthttp.StatusUnauthorized, map[string]string{"error": "auth required"})
+		return
+	}
+	if !acct.IsSubscribed(name) {
+		writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true, "already": true})
+		return
+	}
+	subs := make([]string, 0, len(acct.Subscriptions))
+	for _, s := range acct.Subscriptions {
+		if s == name {
+			continue
+		}
+		subs = append(subs, s)
+	}
+	if err := s.auth.UpdateSubscriptions(acct.Name, subs); err != nil {
+		writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	acct.Subscriptions = subs
+	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleListProxies(ctx *fasthttp.RequestCtx) {
-	writeJSON(ctx, fasthttp.StatusOK, map[string]any{"proxies": s.pool.ProxyList()})
+	set, _ := s.relatedProviders(ctx)
+	writeJSON(ctx, fasthttp.StatusOK, map[string]any{"proxies": s.pool.ProxyListForProviders(set)})
 }
 
 func (s *Server) handleRemoveProxy(ctx *fasthttp.RequestCtx) {
@@ -1227,6 +1462,80 @@ func (s *Server) handleLogin(ctx *fasthttp.RequestCtx) {
 	})
 }
 
+// handleFreeProxies scrapes the configured free-proxy feed on demand and
+// returns matching HTTP proxies one per line (ip:port). Providers point an
+// ip_pool extract_url at this endpoint, so collection happens only when the
+// pool pulls instead of running a local long-lived crawler.
+func (s *Server) handleFreeProxies(ctx *fasthttp.RequestCtx) {
+	if !s.freeAPI.Enabled || s.freeAPI.FeedURL == "" {
+		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "free proxy api disabled"})
+		return
+	}
+	if s.freeAPI.Token != "" {
+		queryToken := string(ctx.URI().QueryArgs().Peek("token"))
+		bearer := bearerToken(ctx)
+		if queryToken != s.freeAPI.Token && bearer != s.freeAPI.Token {
+			writeJSON(ctx, fasthttp.StatusUnauthorized, map[string]string{"error": "invalid token"})
+			return
+		}
+	}
+	maxSpeed := s.freeAPI.MaxSpeedMS
+	if maxSpeed <= 0 {
+		maxSpeed = 2000
+	}
+	req, err := http.NewRequest(http.MethodGet, s.freeAPI.FeedURL, nil)
+	if err != nil {
+		writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(ctx, fasthttp.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(ctx, fasthttp.StatusBadGateway, map[string]string{"error": fmt.Sprintf("feed returned %d", resp.StatusCode)})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var feed struct {
+		Data []struct {
+			IP       string `json:"ip"`
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+			Speed    int    `json:"speed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &feed); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadGateway, map[string]string{"error": "feed parse failed"})
+		return
+	}
+	var sb strings.Builder
+	for _, d := range feed.Data {
+		if d.Speed <= 0 || d.Speed >= maxSpeed {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(d.Protocol), "http") {
+			continue
+		}
+		if d.Port <= 0 || d.Port > 65535 {
+			continue
+		}
+		host := strings.TrimSpace(d.IP)
+		if host == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "%s:%d\n", host, d.Port)
+	}
+	ctx.SetContentType("text/plain; charset=utf-8")
+	ctx.SetBodyString(sb.String())
+}
+
 // handleMe returns the current authenticated account (used by the web console
 // to decide which endpoints to show). Works for non-admin tokens too, so the
 // console can hide admin-only endpoints from regular users. When auth is not
@@ -1393,13 +1702,22 @@ func basicCredentials(ctx *fasthttp.RequestCtx) (user, pass string, ok bool) {
 }
 
 func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
-	stats := s.pool.GroupStats()
+	set, _ := s.relatedProviders(ctx)
+	stats := s.pool.GroupStatsForProviders(set)
 	cfgMap := map[string]config.GroupCfg{}
 	s.groupsMu.RLock()
 	for _, g := range s.groups {
-		if s.groupVisible(ctx, g) {
-			cfgMap[g.Name] = g
+		if !s.groupVisible(ctx, g) {
+			continue
 		}
+		// Trim primary/backup to providers the account can actually see so
+		// the displayed list never offers a group whose providers are
+		// entirely outside the account's scope.
+		trimmed, _ := s.relatedGroupProviders(ctx, g)
+		if len(trimmed.Primary) == 0 {
+			continue
+		}
+		cfgMap[g.Name] = trimmed
 	}
 	s.groupsMu.RUnlock()
 
@@ -1410,13 +1728,17 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 			if !s.groupVisible(ctx, g) {
 				continue
 			}
+			trimmed, _ := s.relatedGroupProviders(ctx, g)
+			if len(trimmed.Primary) == 0 {
+				continue
+			}
 			tiers := []map[string]any{{"name": "primary", "alive_total": 0, "alive_count": 0, "min_alive_ratio": g.MinAliveRatio, "usable": false}}
-			for _, b := range g.Backups {
+			for _, b := range trimmed.Backups {
 				tiers = append(tiers, map[string]any{"name": b.Name, "alive_total": 0, "alive_count": 0, "min_alive_ratio": b.MinAliveRatio, "usable": false})
 			}
 			out = append(out, map[string]any{
 				"group": g.Name, "type": g.Type, "tiers": tiers,
-				"primary": g.Primary, "primary_weights": g.PrimaryWeights, "backups": g.Backups,
+				"primary": trimmed.Primary, "primary_weights": g.PrimaryWeights, "backups": trimmed.Backups,
 				"min_alive_ratio": g.MinAliveRatio, "username": g.Username, "password": g.Password,
 				"regions": g.Regions, "owner": g.Owner,
 			})
@@ -1431,7 +1753,6 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 			// pool has a group the requesting account cannot see
 			continue
 		}
-		_ = ok
 		m := map[string]any{
 			"group": g.Group, "type": g.Type, "tiers": g.Tiers,
 			"primary": cfg.Primary, "primary_weights": cfg.PrimaryWeights, "backups": cfg.Backups,
@@ -1453,13 +1774,14 @@ func (s *Server) handleAddGroup(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	// Non-admins always create groups owned by themselves. Only admins can
-	// create global groups (Owner="") shared by every account.
-	if !s.isAdminUser(ctx) {
-		g.Owner = currentAccount(ctx)
-	}
+	// Every account (including admins) creates groups owned by themselves.
+	g.Owner = currentAccount(ctx)
 	if err := s.validateGroup(g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.groupProvidersVisibleToOwner(ctx, g) {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "group references providers you do not own or have not subscribed to"})
 		return
 	}
 	s.groupsMu.Lock()
@@ -1492,13 +1814,15 @@ func (s *Server) handleUpdateGroup(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	g.Name = name // path name is authoritative (rename unsupported)
-	// Preserve ownership on update: non-admins may not turn their group into
-	// a global one, and may not claim a global group.
-	if !s.isAdminUser(ctx) {
-		g.Owner = currentAccount(ctx)
-	}
+	// Preserve ownership on update: the owner is forced to the requesting
+	// account.
+	g.Owner = currentAccount(ctx)
 	if err := s.validateGroup(g); err != nil {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.groupProvidersVisibleToOwner(ctx, g) {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "group references providers you do not own or have not subscribed to"})
 		return
 	}
 	s.groupsMu.Lock()
@@ -1517,6 +1841,29 @@ func (s *Server) handleUpdateGroup(ctx *fasthttp.RequestCtx) {
 	}
 	s.applyGroups()
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
+// groupProvidersVisibleToOwner reports whether every primary and backup
+// provider referenced by g is in the requesting account's visible set. Admins
+// always pass; non-admins must own or have subscribed to every referenced
+// provider. The check exists so users can never wire a shared provider into a
+// group just by URL-tampering — they have to go through the subscription API
+// first.
+func (s *Server) groupProvidersVisibleToOwner(ctx *fasthttp.RequestCtx, g config.GroupCfg) bool {
+	set, _ := s.relatedProviders(ctx)
+	for _, pn := range g.Primary {
+		if _, ok := set[pn]; !ok {
+			return false
+		}
+	}
+	for _, b := range g.Backups {
+		for _, pn := range b.Providers {
+			if _, ok := set[pn]; !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // handleRemoveGroup deletes a group by name (query param).

@@ -117,6 +117,8 @@ td.mono { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-si
 .group-gw .gw-label { color: var(--blue); font-weight: 600; }
 .group-gw code { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--text); }
 .group-gw.muted { color: var(--muted); margin: 4px 0 10px; font-size: 12px; }
+.group-gw .gw-hint { width: 100%; color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.5; }
+.group-gw .gw-hint code { font-size: 11px; }
 .group-card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -190,6 +192,7 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
 }
 .toggle input:checked + .slider { background: var(--green); }
 .toggle input:checked + .slider:before { transform: translateX(18px); }
+.toggle input:disabled + .slider { opacity: .45; cursor: not-allowed; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .tab {
   padding: 8px 16px; cursor: pointer; color: var(--muted);
@@ -380,6 +383,15 @@ tr.dead-row td { opacity: .5; }
           </tr>
         </thead>
         <tbody id="provider-tbody"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:12px;">
+      <h2>公开市场 <span class="refresh-hint">可添加的共享 Provider</span></h2>
+      <table>
+        <thead>
+          <tr><th>名称</th><th>类型</th><th>创建者</th><th>代理 (存活/总数)</th><th>操作</th></tr>
+        </thead>
+        <tbody id="market-tbody"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -807,9 +819,14 @@ function authHeaders() {
 }
 
 async function api(path, opts = {}) {
+  // Destructure headers out so the spread below does not overwrite the merged
+  // headers object. Spreading opts last would replace headers entirely and
+  // silently drop the Authorization header, causing 401 on every call that
+  // passes its own headers option.
+  const { headers, ...rest } = opts;
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(opts.headers || {}) },
-    ...opts,
+    ...rest,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(headers || {}) },
   });
   const text = await res.text();
   let data = {};
@@ -824,8 +841,10 @@ async function api(path, opts = {}) {
     throw err;
   }
   if (res.status === 403) {
+    // Authenticated but lacking permission: this is NOT a session expiry, so
+    // it must not be treated as "unauthorized" (which would clear the token
+    // and force a re-login). Just surface the error to the caller.
     const err = new Error(data.error || 'forbidden');
-    err.unauthorized = true;
     throw err;
   }
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -918,6 +937,53 @@ async function loadProviders() {
   } catch (e) { toast('加载 Provider 失败: ' + e.message, true); }
 }
 
+async function loadMarket() {
+  try {
+    const data = await api('/api/v1/admin/providers/market');
+    state.market = data.providers || [];
+    renderMarket();
+  } catch (e) { state.market = []; renderMarket(); }
+}
+
+function renderMarket() {
+  const tb = document.getElementById('market-tbody');
+  if (!tb) return;
+  if (!state.market || !state.market.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty">暂无可添加的共享 Provider</td></tr>';
+    return;
+  }
+  const rows = state.market.map(p => {
+    const owner = (p.config && p.config.owner) || '';
+    const alive = p.alive || 0;
+    const total = p.total || 0;
+    return '<tr>' +
+      '<td class="mono"><b>' + esc(p.name) + '</b></td>' +
+      '<td>' + esc(p.type || '') + '</td>' +
+      '<td>' + esc(owner) + '</td>' +
+      '<td>' + alive + '/' + total + '</td>' +
+      '<td><button class="btn btn-sm btn-primary" data-name="' + esc(p.name) + '" onclick="subscribeProvider(this.dataset.name)">添加</button></td>' +
+    '</tr>';
+  }).join('');
+  tb.innerHTML = rows;
+}
+
+async function subscribeProvider(name) {
+  try {
+    await api('/api/v1/admin/providers/' + encodeURIComponent(name) + '/subscribe', { method: 'POST' });
+    toast('已添加「' + name + '」');
+    await refreshAll();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
+
+async function unsubscribeProvider(name) {
+  try {
+    if (!confirm('确认取消「' + name + '」？')) return;
+    await api('/api/v1/admin/providers/' + encodeURIComponent(name) + '/subscribe', { method: 'DELETE' });
+    toast('已取消「' + name + '」');
+    await refreshAll();
+  } catch (e) { toast('取消失败: ' + e.message, true); }
+}
+
 // ---- 本地隐藏共享 Provider ----
 // A non-owner may hide a shared provider from their own console without
 // affecting the owner or other users; this is stored locally only.
@@ -968,7 +1034,7 @@ function renderProviders() {
   ordered.forEach(p => {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
-    const isOwn = admin || (owner !== '' && owner === me);
+    const isOwn = (currentMe === null) || (owner !== '' && owner === me);
     const canSeeFull = isOwn;
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
@@ -1001,9 +1067,10 @@ function renderProviders() {
       ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="openEditProvider(this.dataset.name)">编辑</button>
         <button class="btn btn-sm btn-green" data-name="${esc(p.name)}" onclick="refreshProvider(this.dataset.name)">刷新</button>
         <button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="removeProvider(this.dataset.name)">删除</button>`;
+    } else if (owner !== '') {
+      ops = `<button class="btn btn-sm btn-danger" data-name="${esc(p.name)}" onclick="unsubscribeProvider(this.dataset.name)">取消订阅</button>`;
     } else {
-      ops = `<button class="btn btn-sm" data-name="${esc(p.name)}" onclick="showProviderUsage(this.dataset.name)">使用</button>
-        <button class="btn btn-sm" data-name="${esc(p.name)}" onclick="hideProvider(this.dataset.name)">隐藏</button>`;
+      ops = '<span style="color:var(--muted);font-size:12px;">仅可使用</span>';
     }
 
     const detailMeta = canSeeFull
@@ -1306,12 +1373,14 @@ function renderGroups() {
     const owner = g.owner || '';
     const isGlobal = owner === '';
     const me = (currentMe && currentMe.name) || '';
-    const canEdit = isAdmin() || (owner && owner === me);
+    const canEdit = (currentMe === null) || (owner !== '' && owner === me);
     const ownerTag = isGlobal
       ? '<span class="badge" style="background:var(--bg);color:var(--muted);border:1px solid var(--border);">全局</span>'
       : `<span class="badge" style="background:var(--bg);color:var(--blue);border:1px solid var(--blue);" title="归属 ${esc(owner)}">${esc(owner)}</span>`;
+    const gwPort = (state.status && state.status.gateway_port) || window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+    const gwAddr = `${esc(g.username)}:${esc(g.password)}@${esc(window.location.hostname)}:${gwPort}`;
     const gwAuth = gwEnabled
-      ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}</code> <button class="btn btn-sm" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}" onclick="copyGateway(this)">复制</button></div>`
+      ? `<div class="group-gw"><span class="gw-label">网关地址</span><code>${gwAddr}</code> <button class="btn btn-sm" data-gw="${gwAddr}" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw muted">未配置网关用户名/密码，无法通过网关访问本组</div>';
     const rows = (g.tiers || []).map((t, ti) => {
       const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti - 1]?.providers || []);
@@ -1896,7 +1965,7 @@ function renderUsage() {
 }
 
 async function refreshAll() {
-  await Promise.allSettled([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
+  await Promise.allSettled([loadStatus(), loadProviders(), loadMarket(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]);
 }
 
 async function toggleProvider(name, enabled) {

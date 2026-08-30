@@ -218,9 +218,20 @@ func (p *Pool) SetCountry(id, country string) {
 }
 
 func (p *Pool) All() []*model.Proxy {
+	return p.AllForProviders(nil)
+}
+
+// AllForProviders returns every proxy whose provider is in set. Pass nil to
+// disable the filter and return all proxies; pass an empty map to return none.
+func (p *Pool) AllForProviders(set map[string]struct{}) []*model.Proxy {
 	p.mu.RLock()
 	out := make([]*model.Proxy, 0, len(p.proxies))
 	for _, pr := range p.proxies {
+		if set != nil {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+		}
 		out = append(out, pr)
 	}
 	p.mu.RUnlock()
@@ -437,6 +448,26 @@ func layerRefLatency(proxies []*model.Proxy) int64 {
 	return sum / int64(cnt)
 }
 
+// layerRefLatencyAt is like layerRefLatency but only averages the proxies
+// referenced by indices. Used when a layer has been filtered to a subset of
+// providers (subscription visibility) so the SWRR latency baseline reflects
+// only the eligible pool.
+func layerRefLatencyAt(proxies []*model.Proxy, indices []int) int64 {
+	var sum int64
+	var cnt int
+	for _, i := range indices {
+		lat := proxies[i].LatencyMS.Load()
+		if lat > 0 {
+			sum += lat
+			cnt++
+		}
+	}
+	if cnt == 0 {
+		return 0
+	}
+	return sum / int64(cnt)
+}
+
 func (p *Pool) Seq() uint64 {
 	return p.seq.Load()
 }
@@ -446,7 +477,7 @@ func (p *Pool) Seq() uint64 {
 func (p *Pool) Next() *model.Proxy {
 	snap := p.snap.Load()
 	if len(snap.groups) > 0 {
-		return p.nextFromGroup(&snap.groups[0], nil)
+		return p.nextFromGroup(&snap.groups[0], nil, nil)
 	}
 	return p.nextPrio(snap, nil)
 }
@@ -454,10 +485,16 @@ func (p *Pool) Next() *model.Proxy {
 // NextInGroup returns a proxy from the named group, falling back through the
 // group's backup tiers. Returns nil when the group is unknown or exhausted.
 func (p *Pool) NextInGroup(group string) *model.Proxy {
+	return p.NextInGroupForProviders(group, nil)
+}
+
+// NextInGroupForProviders behaves like NextInGroup but only considers proxies
+// whose provider is in set. Pass nil or an empty set to disable the filter.
+func (p *Pool) NextInGroupForProviders(group string, set map[string]struct{}) *model.Proxy {
 	snap := p.snap.Load()
 	for i := range snap.groups {
 		if snap.groups[i].name == group {
-			return p.nextFromGroup(&snap.groups[i], nil)
+			return p.nextFromGroup(&snap.groups[i], nil, set)
 		}
 	}
 	return nil
@@ -466,8 +503,13 @@ func (p *Pool) NextInGroup(group string) *model.Proxy {
 // NextInGroupExcluding returns a proxy from the named group, excluding the
 // given proxy IDs (used by batch allocation).
 func (p *Pool) NextInGroupExcluding(group string, exclude map[string]struct{}) *model.Proxy {
+	return p.NextInGroupExcludingForProviders(group, nil, exclude)
+}
+
+// NextInGroupExcludingForProviders combines exclude + provider-set filtering.
+func (p *Pool) NextInGroupExcludingForProviders(group string, set map[string]struct{}, exclude map[string]struct{}) *model.Proxy {
 	if len(exclude) == 0 {
-		return p.NextInGroup(group)
+		return p.NextInGroupForProviders(group, set)
 	}
 	snap := p.snap.Load()
 	for i := range snap.groups {
@@ -486,7 +528,7 @@ func (p *Pool) NextInGroupExcluding(group string, exclude map[string]struct{}) *
 				firstDown = true
 				continue
 			}
-			pr := p.pickLayer(l, exclude)
+			pr := p.pickLayer(l, exclude, set)
 			if pr != nil {
 				return pr
 			}
@@ -497,7 +539,7 @@ func (p *Pool) NextInGroupExcluding(group string, exclude map[string]struct{}) *
 	return nil
 }
 
-func (p *Pool) nextFromGroup(g *groupSnap, exclude map[string]struct{}) *model.Proxy {
+func (p *Pool) nextFromGroup(g *groupSnap, exclude map[string]struct{}, set map[string]struct{}) *model.Proxy {
 	for li := range g.layers {
 		l := &g.layers[li]
 		if l.aliveCount == 0 {
@@ -506,7 +548,7 @@ func (p *Pool) nextFromGroup(g *groupSnap, exclude map[string]struct{}) *model.P
 		if float64(l.aliveCount)/float64(l.aliveTotal) < l.minRatio {
 			continue
 		}
-		pr := p.pickLayer(l, exclude)
+		pr := p.pickLayer(l, exclude, set)
 		if pr != nil {
 			return pr
 		}
@@ -515,9 +557,60 @@ func (p *Pool) nextFromGroup(g *groupSnap, exclude map[string]struct{}) *model.P
 }
 
 // pickLayer selects a proxy within one tier using SWRR for pool-based tiers
-// and weighted random otherwise.
-func (p *Pool) pickLayer(l *layerSnap, exclude map[string]struct{}) *model.Proxy {
+// and weighted random otherwise. set optionally restricts which providers
+// are eligible; proxies whose provider is not in set are skipped.
+func (p *Pool) pickLayer(l *layerSnap, exclude map[string]struct{}, set map[string]struct{}) *model.Proxy {
 	if l.totalW <= 0 || len(l.proxies) == 0 {
+		return nil
+	}
+	if set != nil {
+		// When a provider-set filter is in effect the SWRR weight, cumW and
+		// totalW baked into the snapshot are still based on the full layer, so
+		// we re-derive a SWRR picture restricted to the allowed providers.
+		// Hot-path cost is small: pickSWRR is O(N) already.
+		indices := make([]int, 0, len(l.proxies))
+		for i, pr := range l.proxies {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+			if _, ex := exclude[pr.ID]; ex {
+				continue
+			}
+			indices = append(indices, i)
+		}
+		if len(indices) == 0 {
+			return nil
+		}
+		// Try SWRR over the filtered indices; fall back to weighted random if
+		// SWRR returns an excluded proxy (already filtered above).
+		for range 1024 {
+			p.swrrMu.Lock()
+			ref := layerRefLatencyAt(l.proxies, indices)
+			var total int64
+			var best int = -1
+			var bestCW int64 = math.MinInt64
+			for _, i := range indices {
+				w := l.weight[i]
+				if w <= 0 {
+					w = 1
+				}
+				w = latencyScaledWeight(ref, w, l.proxies[i].LatencyMS.Load())
+				cw := p.swrr[l.proxies[i].ID] + w
+				p.swrr[l.proxies[i].ID] = cw
+				total += w
+				if cw > bestCW {
+					bestCW = cw
+					best = i
+				}
+			}
+			if best >= 0 && total > 0 {
+				p.swrr[l.proxies[best].ID] -= total
+			}
+			p.swrrMu.Unlock()
+			if best >= 0 {
+				return l.proxies[best]
+			}
+		}
 		return nil
 	}
 	if len(exclude) == 0 {
@@ -636,14 +729,75 @@ func (p *Pool) nextPrio(snap *Snapshot, exclude map[string]struct{}) *model.Prox
 }
 
 func (p *Pool) NextExcluding(exclude map[string]struct{}) *model.Proxy {
+	return p.NextExcludingForProviders(nil, exclude)
+}
+
+func (p *Pool) NextExcludingForProviders(set map[string]struct{}, exclude map[string]struct{}) *model.Proxy {
 	if len(exclude) == 0 {
-		return p.Next()
+		return p.NextForProviders(set)
 	}
 	snap := p.snap.Load()
 	if len(snap.groups) > 0 {
-		return p.NextInGroupExcluding(snap.groups[0].name, exclude)
+		return p.NextInGroupExcludingForProviders(snap.groups[0].name, set, exclude)
 	}
-	return p.nextPrio(snap, exclude)
+	return p.nextPrioExcludingForProviders(snap, set, exclude)
+}
+
+// nextPrioExcludingForProviders is the legacy priority picker with provider
+// set filtering on top.
+func (p *Pool) nextPrioExcludingForProviders(snap *Snapshot, set map[string]struct{}, exclude map[string]struct{}) *model.Proxy {
+	for gi := range snap.prio {
+		g := &snap.prio[gi]
+		if g.aliveCount == 0 {
+			continue
+		}
+		if float64(g.aliveCount)/float64(g.aliveTotal) < g.minRatio {
+			continue
+		}
+		for range 1000 {
+			target := rand.Int64N(g.totalW)
+			j := sort.Search(len(g.cumW), func(i int) bool { return g.cumW[i] > target })
+			pr := snap.proxies[g.start+j]
+			if set != nil {
+				if _, ok := set[pr.Provider]; !ok {
+					continue
+				}
+			}
+			if _, ok := exclude[pr.ID]; !ok {
+				return pr
+			}
+		}
+	}
+	return nil
+}
+
+// NextForProviders is like Next but limits the eligible providers to set.
+func (p *Pool) NextForProviders(set map[string]struct{}) *model.Proxy {
+	snap := p.snap.Load()
+	if len(snap.groups) > 0 {
+		return p.nextFromGroup(&snap.groups[0], nil, set)
+	}
+	if len(set) == 0 {
+		return p.nextPrio(snap, nil)
+	}
+	for gi := range snap.prio {
+		g := &snap.prio[gi]
+		if g.aliveCount == 0 {
+			continue
+		}
+		if float64(g.aliveCount)/float64(g.aliveTotal) < g.minRatio {
+			continue
+		}
+		for range 1000 {
+			target := rand.Int64N(g.totalW)
+			j := sort.Search(len(g.cumW), func(i int) bool { return g.cumW[i] > target })
+			pr := snap.proxies[g.start+j]
+			if _, ok := set[pr.Provider]; ok {
+				return pr
+			}
+		}
+	}
+	return nil
 }
 
 // StickyNext returns a proxy for clientKey, reusing the same proxy until the
@@ -651,11 +805,18 @@ func (p *Pool) NextExcluding(exclude map[string]struct{}) *model.Proxy {
 // session exists, it falls back to Next() (or NextInGroup when group is set)
 // and records a new session when the selected proxy supports stickiness.
 func (p *Pool) StickyNext(clientKey string, stickySeconds int, group string) *model.Proxy {
+	return p.StickyNextForProviders(clientKey, stickySeconds, group, nil)
+}
+
+// StickyNextForProviders is like StickyNext but restricts the eligible
+// providers to set. A reused sticky session is dropped if its provider is
+// not in set (so unsubscribing immediately takes effect for the next call).
+func (p *Pool) StickyNextForProviders(clientKey string, stickySeconds int, group string, set map[string]struct{}) *model.Proxy {
 	if clientKey == "" || stickySeconds <= 0 {
 		if group != "" {
-			return p.NextInGroup(group)
+			return p.NextInGroupForProviders(group, set)
 		}
-		return p.Next()
+		return p.NextForProviders(set)
 	}
 
 	now := time.Now().UnixNano()
@@ -663,22 +824,28 @@ func (p *Pool) StickyNext(clientKey string, stickySeconds int, group string) *mo
 
 	p.stickyMu.Lock()
 	if e, ok := p.sticky[clientKey]; ok && e.expireAt > now {
-		// session still valid: reuse if proxy still alive and present
+		// session still valid: reuse if proxy still alive, present, and allowed
 		pr := p.Get(e.proxyID)
 		if pr != nil && pr.Alive.Load() {
-			p.stickyMu.Unlock()
-			return pr
+			if len(set) == 0 {
+				p.stickyMu.Unlock()
+				return pr
+			}
+			if _, ok := set[pr.Provider]; ok {
+				p.stickyMu.Unlock()
+				return pr
+			}
 		}
-		// stale session: drop and re-pick below
+		// stale or no longer allowed: drop and re-pick below
 		delete(p.sticky, clientKey)
 	}
 	p.stickyMu.Unlock()
 
 	var pr *model.Proxy
 	if group != "" {
-		pr = p.NextInGroup(group)
+		pr = p.NextInGroupForProviders(group, set)
 	} else {
-		pr = p.Next()
+		pr = p.NextForProviders(set)
 	}
 	if pr == nil {
 		return nil
@@ -762,11 +929,34 @@ func (p *Pool) RemoveExpired() int {
 }
 
 func (p *Pool) Stats() (total, alive int) {
+	return p.StatsForProviders(nil)
+}
+
+// StatsForProviders reports the total/alive count of proxies whose provider
+// is in set. Pass nil to count all proxies; an empty set counts none.
+func (p *Pool) StatsForProviders(set map[string]struct{}) (total, alive int) {
 	p.mu.RLock()
-	total = len(p.proxies)
+	for _, pr := range p.proxies {
+		if set != nil {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+		}
+		total++
+	}
 	p.mu.RUnlock()
-	alive = len(p.snap.Load().proxies)
-	return total, alive
+	snap := p.snap.Load()
+	if set == nil {
+		alive = len(snap.proxies)
+		return
+	}
+	for _, pr := range snap.proxies {
+		if _, ok := set[pr.Provider]; !ok {
+			continue
+		}
+		alive++
+	}
+	return
 }
 
 type ProviderStat struct {
@@ -793,6 +983,13 @@ type TierStat struct {
 
 // GroupStats returns the scheduling status of all configured groups.
 func (p *Pool) GroupStats() []GroupStat {
+	return p.GroupStatsForProviders(nil)
+}
+
+// GroupStatsForProviders returns per-tier stats restricted to proxies whose
+// provider is in set. Each tier's alive_count / alive_total are recomputed
+// so callers see exactly what the requesting account could pull.
+func (p *Pool) GroupStatsForProviders(set map[string]struct{}) []GroupStat {
 	snap := p.snap.Load()
 	out := make([]GroupStat, 0, len(snap.groups))
 	for gi := range snap.groups {
@@ -800,11 +997,25 @@ func (p *Pool) GroupStats() []GroupStat {
 		gs := GroupStat{Group: g.name, Type: groupType(p.groupsCfg, g.name)}
 		for li := range g.layers {
 			l := &g.layers[li]
-			usable := l.aliveCount > 0 && float64(l.aliveCount)/float64(l.aliveTotal) >= l.minRatio
+			var total, alive int
+			if len(set) == 0 {
+				alive = l.aliveCount
+				total = l.aliveTotal
+			} else {
+				for _, pr := range l.proxies {
+					if _, ok := set[pr.Provider]; ok {
+						total++
+						if pr.Alive.Load() {
+							alive++
+						}
+					}
+				}
+			}
+			usable := alive > 0 && float64(alive)/float64(max1(total)) >= l.minRatio
 			gs.Tiers = append(gs.Tiers, TierStat{
 				Name:       l.name,
-				AliveTotal: l.aliveTotal,
-				AliveCount: l.aliveCount,
+				AliveTotal: total,
+				AliveCount: alive,
 				MinRatio:   l.minRatio,
 				Usable:     usable,
 			})
@@ -812,6 +1023,15 @@ func (p *Pool) GroupStats() []GroupStat {
 		out = append(out, gs)
 	}
 	return out
+}
+
+// max1 returns n if positive, else 1, to avoid division by zero when a tier
+// is empty after the provider-set filter is applied.
+func max1(n int) int {
+	if n <= 0 {
+		return 1
+	}
+	return n
 }
 
 func groupType(cfgs []config.GroupCfg, name string) string {
@@ -824,9 +1044,21 @@ func groupType(cfgs []config.GroupCfg, name string) string {
 }
 
 func (p *Pool) StatsByProvider() []ProviderStat {
+	return p.StatsByProviders(nil)
+}
+
+// StatsByProviders reports per-provider counts of total and alive proxies,
+// restricted to the given provider set. Pass nil to count every provider;
+// pass an empty map to count none.
+func (p *Pool) StatsByProviders(set map[string]struct{}) []ProviderStat {
 	byProv := map[string]*ProviderStat{}
 	p.mu.RLock()
 	for _, pr := range p.proxies {
+		if set != nil {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+		}
 		st := byProv[pr.Provider]
 		if st == nil {
 			st = &ProviderStat{Provider: pr.Provider}
@@ -835,7 +1067,13 @@ func (p *Pool) StatsByProvider() []ProviderStat {
 		st.Total++
 	}
 	p.mu.RUnlock()
-	for _, pr := range p.snap.Load().proxies {
+	snap := p.snap.Load()
+	for _, pr := range snap.proxies {
+		if set != nil {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+		}
 		if st := byProv[pr.Provider]; st != nil {
 			st.Alive++
 		}
@@ -844,6 +1082,7 @@ func (p *Pool) StatsByProvider() []ProviderStat {
 	for _, st := range byProv {
 		out = append(out, *st)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
 	return out
 }
 
@@ -867,9 +1106,20 @@ type ProxyDetail struct {
 }
 
 func (p *Pool) ProxyList() []ProxyDetail {
+	return p.ProxyListForProviders(nil)
+}
+
+// ProxyListForProviders returns a JSON-serialisable view of every proxy whose
+// provider is in set. Pass nil to return all; an empty set returns none.
+func (p *Pool) ProxyListForProviders(set map[string]struct{}) []ProxyDetail {
 	p.mu.RLock()
 	out := make([]ProxyDetail, 0, len(p.proxies))
 	for _, pr := range p.proxies {
+		if set != nil {
+			if _, ok := set[pr.Provider]; !ok {
+				continue
+			}
+		}
 		out = append(out, ProxyDetail{
 			ID:            pr.ID,
 			Provider:      pr.Provider,

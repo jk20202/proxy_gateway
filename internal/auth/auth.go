@@ -20,12 +20,13 @@ func NewToken() string {
 
 // Account is a runtime view of an internal user.
 type Account struct {
-	Name     string
-	Password string
-	Token    string
-	Role     string
-	Enabled  bool
-	Groups   []string
+	Name          string
+	Password      string
+	Token         string
+	Role          string
+	Enabled       bool
+	Groups        []string
+	Subscriptions []string
 }
 
 // IsAdmin reports whether the account has the admin role.
@@ -41,6 +42,21 @@ func (a *Account) CanUseGroup(group string) bool {
 	}
 	for _, g := range a.Groups {
 		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSubscribed reports whether the account has subscribed to the given
+// provider name. A subscription grants a non-owner access to a shared
+// provider's proxies, stats and group inclusion.
+func (a *Account) IsSubscribed(name string) bool {
+	if a == nil {
+		return false
+	}
+	for _, s := range a.Subscriptions {
+		if s == name {
 			return true
 		}
 	}
@@ -71,7 +87,7 @@ func (m *Manager) SyncAll() error {
 	for _, a := range m.byName {
 		accts = append(accts, config.AccountCfg{
 			Name: a.Name, Password: a.Password, Token: a.Token,
-			Role: a.Role, Enabled: a.Enabled, Groups: a.Groups,
+			Role: a.Role, Enabled: a.Enabled, Groups: a.Groups, Subscriptions: a.Subscriptions,
 		})
 	}
 	pers := m.persist
@@ -90,12 +106,13 @@ func New(cfgs []config.AccountCfg) *Manager {
 	}
 	for _, c := range cfgs {
 		acct := &Account{
-			Name:     c.Name,
-			Password: c.Password,
-			Token:    c.Token,
-			Role:     c.Role,
-			Enabled:  c.Enabled,
-			Groups:   c.Groups,
+			Name:          c.Name,
+			Password:      c.Password,
+			Token:         c.Token,
+			Role:          c.Role,
+			Enabled:       c.Enabled,
+			Groups:        c.Groups,
+			Subscriptions: c.Subscriptions,
 		}
 		if acct.Role == "" {
 			acct.Role = "user"
@@ -147,7 +164,7 @@ func (m *Manager) List() []config.AccountCfg {
 	out := make([]config.AccountCfg, 0, len(m.byName))
 	for _, a := range m.byName {
 		out = append(out, config.AccountCfg{
-			Name: a.Name, Password: "", Token: a.Token, Role: a.Role, Enabled: a.Enabled, Groups: a.Groups,
+			Name: a.Name, Password: "", Token: a.Token, Role: a.Role, Enabled: a.Enabled, Groups: a.Groups, Subscriptions: a.Subscriptions,
 		})
 	}
 	return out
@@ -169,7 +186,7 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 		c.Token = NewToken()
 	}
 	acct := &Account{
-		Name: c.Name, Password: c.Password, Token: c.Token, Role: c.Role, Enabled: c.Enabled, Groups: c.Groups,
+		Name: c.Name, Password: c.Password, Token: c.Token, Role: c.Role, Enabled: c.Enabled, Groups: c.Groups, Subscriptions: c.Subscriptions,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,10 +199,30 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 	if m.persist != nil {
 		if err := m.persist.SaveAccount(config.AccountCfg{
 			Name: acct.Name, Password: acct.Password, Token: acct.Token,
-			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
+			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups, Subscriptions: acct.Subscriptions,
 		}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// UpdateSubscriptions replaces the account's subscription list (provider names
+// the account has subscribed to from the shared market). Pass a nil slice to
+// clear all subscriptions.
+func (m *Manager) UpdateSubscriptions(name string, subs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	acct := m.byName[name]
+	if acct == nil {
+		return &ConfigError{"account not found"}
+	}
+	acct.Subscriptions = subs
+	if m.persist != nil {
+		return m.persist.SaveAccount(config.AccountCfg{
+			Name: acct.Name, Password: acct.Password, Token: acct.Token,
+			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups, Subscriptions: acct.Subscriptions,
+		})
 	}
 	return nil
 }
@@ -214,6 +251,9 @@ func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 	if c.Groups != nil {
 		acct.Groups = c.Groups
 	}
+	if c.Subscriptions != nil {
+		acct.Subscriptions = c.Subscriptions
+	}
 	acct.Enabled = c.Enabled
 	if c.Token != "" {
 		if old := acct.Token; old != "" {
@@ -238,7 +278,7 @@ func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 		// is upserted and the old name is removed so no stale row remains.
 		if err := m.persist.SaveAccount(config.AccountCfg{
 			Name: acct.Name, Password: acct.Password, Token: acct.Token,
-			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
+			Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups, Subscriptions: acct.Subscriptions,
 		}); err != nil {
 			return err
 		}

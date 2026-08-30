@@ -13,27 +13,28 @@ func TestLoadFreeConfig(t *testing.T) {
 	if urls := cfg.HealthCheck.EnabledCheckURLs(); len(urls) != 5 {
 		t.Fatalf("all 5 default check_urls should be enabled, got %d: %v", len(urls), urls)
 	}
+	if !cfg.FreeAPI.Enabled || cfg.FreeAPI.FeedURL == "" || cfg.FreeAPI.MaxSpeedMS <= 0 {
+		t.Fatalf("config.yaml should enable free_api with feed_url and max_speed_ms: %+v", cfg.FreeAPI)
+	}
 	found := false
 	for _, p := range cfg.Providers {
-		if p.Name == "charlespikachu-free" {
+		if p.Name == "free-proxies" {
 			found = true
-			if p.Type != "free" || p.Free == nil {
-				t.Fatalf("charlespikachu-free not free type: %+v", p)
+			if p.Type != "ip_pool" || p.IPPool == nil {
+				t.Fatalf("free-proxies should be ip_pool type: %+v", p)
 			}
-			if p.Free.FeedURL == "" || p.Free.MaxSpeedMS != 3000 || p.Free.DeleteLatencyMS != 3000 {
-				t.Fatalf("charlespikachu-free free cfg wrong: %+v", p.Free)
-			}
-			if p.Free.ExpireSeconds != 0 || p.Free.MaxProxies != 0 {
-				t.Fatalf("free provider must not expire / not cap: %+v", p.Free)
+			if p.IPPool.ExtractURL != "http://127.0.0.1:8080/api/v1/free-proxies" {
+				t.Fatalf("free-proxies extract_url should point at the free_api endpoint: %+v", p.IPPool)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("charlespikachu-free provider not found")
+		t.Fatal("free-proxies provider not found")
 	}
-	_, ok := cfg.Group("charlespikachu-free")
-	if !ok {
-		t.Fatal("charlespikachu-free group not found")
+	for _, p := range cfg.Providers {
+		if p.Type == "free" {
+			t.Fatalf("no provider should use the local free crawler type anymore: %+v", p)
+		}
 	}
 }
 
