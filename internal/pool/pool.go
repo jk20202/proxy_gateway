@@ -318,8 +318,18 @@ func (p *Pool) buildGroups(alive []*model.Proxy) []groupSnap {
 		g := groupSnap{name: gc.Name}
 		totalByProv, aliveByProv := regionAggregates(gc.Regions, all, alive)
 		g.layers = append(g.layers, buildLayer("primary", gc.Primary, gc.PrimaryWeights, gc.MinAliveRatio, aliveByProv, totalByProv))
+		// 备用池作为「一个整体」层：合并所有 backups 引用的 provider，按
+		// backup_weights 占比调度（与主池一致），主池存活率跌破阈值才切到它。
+		var backupProviders []string
 		for _, bk := range gc.Backups {
-			g.layers = append(g.layers, buildLayer(bk.Name, bk.Providers, nil, bk.MinAliveRatio, aliveByProv, totalByProv))
+			backupProviders = append(backupProviders, bk.Providers...)
+		}
+		if len(backupProviders) > 0 {
+			backupMinRatio := 0.0
+			if len(gc.Backups) > 0 {
+				backupMinRatio = gc.Backups[0].MinAliveRatio
+			}
+			g.layers = append(g.layers, buildLayer("backup", backupProviders, gc.BackupWeights, backupMinRatio, aliveByProv, totalByProv))
 		}
 		out = append(out, g)
 	}

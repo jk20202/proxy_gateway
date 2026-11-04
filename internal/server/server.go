@@ -1558,6 +1558,7 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 			out = append(out, map[string]any{
 				"group": g.Name, "type": g.Type, "tiers": tiers,
 				"primary": g.Primary, "primary_weights": g.PrimaryWeights, "backups": g.Backups,
+				"backup_weights": g.BackupWeights,
 				"min_alive_ratio": g.MinAliveRatio, "username": g.Username, "password": g.Password,
 				"regions": g.Regions, "owner": g.Owner,
 			})
@@ -1576,6 +1577,7 @@ func (s *Server) handleListGroups(ctx *fasthttp.RequestCtx) {
 		m := map[string]any{
 			"group": g.Group, "type": g.Type, "tiers": g.Tiers,
 			"primary": cfg.Primary, "primary_weights": cfg.PrimaryWeights, "backups": cfg.Backups,
+			"backup_weights": cfg.BackupWeights,
 			"min_alive_ratio": cfg.MinAliveRatio,
 			"username":        cfg.Username,
 			"password":        cfg.Password,
@@ -1749,11 +1751,11 @@ func (s *Server) validateGroup(g config.GroupCfg) error {
 			return errors.New("primary_weights must sum to 100 when specified for all primary providers")
 		}
 	}
+	// 备用池语义：所有 backups 引用的 provider 合并为一个整体池，按
+	// backup_weights 占比调度。合并后的集合用于 provider 存在性与权重校验。
+	backupProviders := map[string]bool{}
 	for bi := range g.Backups {
 		b := &g.Backups[bi]
-		if b.Name == "" {
-			return errors.New("backup pool name is required")
-		}
 		if b.MinAliveRatio < 0 || b.MinAliveRatio > 1 {
 			return errors.New("backup min_alive_ratio must be in [0,1]")
 		}
@@ -1761,6 +1763,24 @@ func (s *Server) validateGroup(g config.GroupCfg) error {
 			if !known[pn] {
 				return errors.New("backup references unknown provider: " + pn)
 			}
+			backupProviders[pn] = true
+		}
+	}
+	for pn, w := range g.BackupWeights {
+		if w < 1 {
+			return errors.New("backup_weights[" + pn + "] must be >= 1")
+		}
+		if !backupProviders[pn] {
+			return errors.New("backup_weights references " + pn + " which is not in backups")
+		}
+	}
+	if len(g.BackupWeights) == len(backupProviders) && len(backupProviders) > 0 {
+		sum := 0
+		for _, w := range g.BackupWeights {
+			sum += w
+		}
+		if sum != 100 {
+			return errors.New("backup_weights must sum to 100 when specified for all backup providers")
 		}
 	}
 	return nil

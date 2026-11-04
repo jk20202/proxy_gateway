@@ -55,6 +55,10 @@ type GroupCfg struct {
 	// 未指定的 provider 权重为 1。权重已从 Provider 层迁移到分组主池层配置。
 	PrimaryWeights map[string]int `yaml:"primary_weights" json:"primary_weights"`
 	Backups        []BackupPool   `yaml:"backups" json:"backups"`
+	// BackupWeights 备用池中各 provider 的调度权重（provider 名 -> 权重百分比），
+	// 语义与主池的 primary_weights 一致：备用池整体按占比调度，代理失效后占比
+	// 自动重分给其它存活代理。未指定时备用池内等权均分。
+	BackupWeights map[string]int `yaml:"backup_weights" json:"backup_weights"`
 	// Regions restricts which proxies may enter this group, matched against the
 	// proxy's country code. Values are "domestic" (CN 中国内地), "overseas"
 	// (一切非中国内地，含中国香港 HK) or a specific ISO alpha-2 code (e.g.
@@ -196,6 +200,12 @@ type ProviderCfg struct {
 	// Country 可选：显式指定该 provider 所有代理的国家代码（ISO alpha-2），
 	// 入池后直接打标，跳过 IP 归属查询。
 	Country string          `yaml:"country" json:"country"`
+	// URLs 直接粘贴的代理地址列表（tunnel / sticky 类型）。每项为一条完整或
+	// 简写的代理 URL：`[scheme://][user:pass@]host:port`，省略 scheme 时默认
+	// http。一个 URL 对应一个代理（tunnel=动态隧道、sticky=长期固定 IP 的静态
+	// 隧道），多个 URL 即多个代理，按调度权重轮换。提供此字段时无需再填
+	// tunnel / ip_pool 的分散字段。
+	URLs    []string        `yaml:"urls" json:"urls"`
 	Tunnel  *TunnelConfig   `yaml:"tunnel" json:"tunnel"`
 	IPPool  *IPPoolConfig   `yaml:"ip_pool" json:"ip_pool"`
 	Free    *FreePoolConfig `yaml:"free" json:"free"`
@@ -442,34 +452,40 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("providers[%s]: unsupported type %q (want tunnel, ip_pool, sticky or free)", p.Name, p.Type)
 		}
 		if p.Type == "tunnel" {
-			if p.Tunnel == nil {
-				return fmt.Errorf("providers[%s]: tunnel config is required", p.Name)
-			}
-			if p.Tunnel.Gateway == "" {
-				return fmt.Errorf("providers[%s]: tunnel.gateway is required", p.Name)
-			}
-			if p.Tunnel.Port == 0 {
-				p.Tunnel.Port = 8080
-			}
-			if p.Tunnel.Scheme == "" {
-				p.Tunnel.Scheme = "http"
+			// urls 直接粘贴模式：无需分散的 tunnel 字段。
+			if len(p.URLs) == 0 {
+				if p.Tunnel == nil {
+					return fmt.Errorf("providers[%s]: tunnel config or urls is required", p.Name)
+				}
+				if p.Tunnel.Gateway == "" {
+					return fmt.Errorf("providers[%s]: tunnel.gateway is required", p.Name)
+				}
+				if p.Tunnel.Port == 0 {
+					p.Tunnel.Port = 8080
+				}
+				if p.Tunnel.Scheme == "" {
+					p.Tunnel.Scheme = "http"
+				}
 			}
 		}
 		if p.Type == "ip_pool" || p.Type == "sticky" {
-			if p.IPPool == nil {
-				return fmt.Errorf("providers[%s]: ip_pool config is required", p.Name)
-			}
-			if p.IPPool.ExtractURL == "" {
-				return fmt.Errorf("providers[%s]: ip_pool.extract_url is required", p.Name)
-			}
-			if p.IPPool.Format == "" {
-				p.IPPool.Format = "raw"
-			}
-			if p.IPPool.RefreshSeconds == 0 {
-				p.IPPool.RefreshSeconds = 60
-			}
-			if p.IPPool.ExpireSeconds == 0 {
-				p.IPPool.ExpireSeconds = 600
+			// urls 直接粘贴模式（主要针对 sticky 静态隧道）：无需 extract_url。
+			if len(p.URLs) == 0 {
+				if p.IPPool == nil {
+					return fmt.Errorf("providers[%s]: ip_pool config or urls is required", p.Name)
+				}
+				if p.IPPool.ExtractURL == "" {
+					return fmt.Errorf("providers[%s]: ip_pool.extract_url is required", p.Name)
+				}
+				if p.IPPool.Format == "" {
+					p.IPPool.Format = "raw"
+				}
+				if p.IPPool.RefreshSeconds == 0 {
+					p.IPPool.RefreshSeconds = 60
+				}
+				if p.IPPool.ExpireSeconds == 0 {
+					p.IPPool.ExpireSeconds = 600
+				}
 			}
 		}
 		if p.Type == "sticky" && p.StickySeconds == 0 {

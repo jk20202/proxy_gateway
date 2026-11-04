@@ -182,3 +182,12 @@ usage.db
 # Build artifacts & runtime state
 /proxy-pool
 groups.json
+
+# WorkBuddy project data & runtime persistence
+.workbuddy/
+/data/
+data/
+settings.json
+accounts.json
+providers.json
+groups.json

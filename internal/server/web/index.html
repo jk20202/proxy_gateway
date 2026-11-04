@@ -161,6 +161,17 @@ input, select, textarea { font-family: inherit; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; }
 th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th .arrow { display: inline-block; margin-left: 3px; opacity: 0; transition: opacity .15s; font-size: 10px; }
+th.sortable:hover .arrow, th.sorted .arrow { opacity: 1; }
+th.sorted { color: var(--accent); }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.toolbar .filter-select {
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 12px; border-radius: 10px; font-size: 13px; outline: none; cursor: pointer;
+}
+.toolbar .filter-select:focus { border-color: var(--accent); }
 tbody tr { transition: background .14s ease; }
 tbody tr:hover { background: var(--panel2); }
 td.mono, .mono { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 12px; }
@@ -275,7 +286,26 @@ tr.dead-row td { opacity: .45; }
 .prov-chip.on { background: rgba(99,102,241,.15); border-color: rgba(99,102,241,.4); color: var(--accent); }
 .prov-chip.off { color: var(--muted); }
 
-/* 分组弹窗 */
+/* 分组弹窗（循序渐进式） */
+.g-steps { display: flex; align-items: center; gap: 4px; margin-bottom: 20px; }
+.g-step { flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 6px; border-radius: 10px; font-size: 12.5px; color: var(--muted); cursor: default; transition: .2s; }
+.g-step .g-step-num {
+  width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--panel2); border: 1px solid var(--border); font-size: 12px; font-weight: 700; transition: .2s;
+}
+.g-step.active { color: var(--text); }
+.g-step.active .g-step-num { background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; color: #fff; }
+.g-step.done .g-step-num { background: var(--green); border-color: transparent; color: #fff; }
+.g-step-panel { animation: viewIn .25s ease; }
+.g-region-choice { display: flex; gap: 10px; flex-wrap: wrap; }
+.g-region-choice .region-pill { padding: 10px 18px; font-size: 13px; }
+.g-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.g-pool-toolbar .hint { color: var(--muted); font-size: 12px; }
+.g-weight-summary { margin-top: 12px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.g-weight-summary b { color: var(--accent); font-size: 15px; }
+.g-weight-summary .bar { flex: 1; height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; margin-left: 6px; }
+.g-weight-summary .bar .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
+.pool-empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 30px 10px; font-size: 12.5px; }
 .gs-block { border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; background: var(--bg-soft); }
 .gs-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 12px; letter-spacing: .04em; }
 .gs-row { display: flex; gap: 14px; flex-wrap: wrap; }
@@ -332,7 +362,10 @@ tr.dead-row td { opacity: .45; }
 .cu-add:hover { text-decoration: underline; }
 
 /* API 文档 */
-.apidoc-layout { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+.apidoc-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
+.apidoc-right-wrap { min-width: 0; }
+.apidoc-code-scroll { max-width: 100%; overflow-x: auto; border-radius: 10px; }
+.apidoc-code-scroll pre { margin: 0; min-width: max-content; }
 .apidoc-menu { max-height: calc(100vh - 240px); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
 .apidoc-item { display: flex; gap: 10px; padding: 11px 13px; cursor: pointer; border-bottom: 1px solid var(--border); align-items: baseline; transition: .15s; }
 .apidoc-item:last-child { border-bottom: none; }
@@ -419,8 +452,17 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         <div class="card">
           <h2><span class="h2-left">代理平台（Provider）列表 <span class="refresh-hint">自动刷新中</span></span>
             <span style="display:flex;gap:8px;"><button class="btn magnetic" onclick="runHealthCheck()">立即健康检查</button><button class="btn btn-primary magnetic" onclick="openAddProvider()">+ 添加 Provider</button></span></h2>
+          <div class="toolbar">
+            <input class="search" id="provider-search" placeholder="模糊搜索名称 / 类型..." oninput="renderProviders()">
+            <select class="filter-select" onchange="filterState.providers.type=this.value;renderProviders()">
+              <option value="">全部类型</option><option value="tunnel">tunnel</option><option value="ip_pool">ip_pool</option><option value="sticky">sticky</option><option value="free">free</option>
+            </select>
+            <select class="filter-select" onchange="filterState.providers.status=this.value;renderProviders()">
+              <option value="">全部状态</option><option value="on">启用</option><option value="off">停用</option>
+            </select>
+          </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>名称</th><th>类型</th><th>共享</th><th>启用</th><th>检测</th><th>存活/总数</th><th>地区</th><th>状态</th><th>操作</th></tr></thead>
+            <thead id="provider-thead"></thead>
             <tbody id="provider-tbody"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody>
           </table></div>
         </div>
@@ -431,12 +473,18 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         <div class="card">
           <h2><span class="h2-left">代理明细</span>
             <span style="display:flex;gap:8px;align-items:center;">
-              <input class="search" id="proxy-search" placeholder="搜索 IP / Provider / 地区..." oninput="renderProxies()">
+              <input class="search" id="proxy-search" placeholder="模糊搜索地址 / Provider / 地区..." oninput="renderProxies()">
+              <select class="filter-select" onchange="filterState.proxies.kind=this.value;renderProxies()">
+                <option value="">全部类型</option><option value="tunnel">tunnel</option><option value="ip_pool">ip_pool</option><option value="sticky">sticky</option><option value="free">free</option>
+              </select>
+              <select class="filter-select" onchange="filterState.proxies.status=this.value;renderProxies()">
+                <option value="">全部状态</option><option value="alive">存活</option><option value="dead">失效</option>
+              </select>
               <label class="toggle" title="自动刷新开关"><input type="checkbox" id="proxy-autorefresh" checked onchange="toggleProxyAutoRefresh(this.checked)"><span class="slider"></span></label>
               <span class="refresh-hint" id="proxy-autorefresh-label">自动刷新</span>
             </span></h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>地址</th><th>类型</th><th>地区</th><th>Provider</th><th>状态</th><th>延迟</th><th>权重</th><th>操作</th></tr></thead>
+            <thead id="proxy-thead"></thead>
             <tbody id="proxy-tbody"><tr><td colspan="8" class="empty">加载中...</td></tr></tbody>
           </table></div>
           <div class="pagination" id="proxy-pagination"></div>
@@ -460,7 +508,7 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
           <h2><span class="h2-left">账户列表 <span class="refresh-hint">Token 由系统自动生成用于 API 调用</span></span>
             <button class="btn btn-primary magnetic" onclick="openAccountModal('')">+ 新增账户</button></h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>名称</th><th>角色</th><th>Token</th><th>可用分组</th><th>启用</th><th>操作</th></tr></thead>
+            <thead id="account-thead"></thead>
             <tbody id="account-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
           </table></div>
         </div>
@@ -471,7 +519,7 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         <div class="card">
           <h2><span class="h2-left">按账户调用统计</span></h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>账户</th><th>调用次数</th><th>成功</th><th>成功率</th></tr></thead>
+            <thead id="usage-thead"></thead>
             <tbody id="usage-tbody"><tr><td colspan="4" class="empty">加载中...</td></tr></tbody>
           </table></div>
         </div>
@@ -483,7 +531,7 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
           <h2><span class="h2-left">Webhook 通知</span><button class="btn btn-primary magnetic" onclick="openWebhookModal('')">+ 添加 Webhook</button></h2>
           <p class="refresh-hint" style="margin-bottom:12px;">事件发生时向以下 URL 发送 HTTP POST JSON；Secret 作为 X-Webhook-Secret 请求头用于校验签名；events 留空=全部事件。</p>
           <div class="table-wrap"><table>
-            <thead><tr><th>备注</th><th>URL</th><th>事件</th><th>操作</th></tr></thead>
+            <thead id="webhook-thead"></thead>
             <tbody id="alert-webhook-tbody"><tr><td colspan="4" class="empty">加载中...</td></tr></tbody>
           </table></div>
         </div>
@@ -555,7 +603,7 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
           <h2 style="margin-bottom:16px;"><span class="h2-left">API 接口</span><input class="search" id="apidoc-search" placeholder="搜索接口..." oninput="renderAPIDocList()" style="margin-left:auto;"></h2>
           <div class="apidoc-layout">
             <div class="apidoc-menu" id="apidoc-menu"></div>
-            <div>
+            <div class="apidoc-right-wrap">
               <div class="apidoc-section" id="apidoc-placeholder" style="color:var(--muted);text-align:center;padding:80px 20px;border:1px dashed var(--border);border-radius:12px;">← 从左侧选择接口查看调用案例</div>
               <div id="apidoc-detail-body" style="display:none;"></div>
             </div>
@@ -581,15 +629,13 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
     </div>
     <div class="form-row"><label>检测频率 check_interval_s（秒，0=全局默认）</label><input id="p-check-interval" type="number" min="0" value="0"></div>
     <div class="form-row"><label>存活率阈值 min_alive_ratio（0~1，如 0.1 = 90% 失效才降级）</label><input id="p-min-ratio" type="number" step="0.01" min="0" max="1" value="0"></div>
-    <div class="form-row" id="p-sticky-row" style="display:none;"><label>粘性时长 sticky_seconds（秒）</label><input id="p-sticky-seconds" type="number" min="0" value="60"></div>
-    <div id="tunnel-fields">
-      <div class="form-row"><label>隧道网关地址</label><input id="p-tunnel-gateway" placeholder="tunnel.proxy.example.com"></div>
-      <div class="form-row"><label>端口</label><input id="p-tunnel-port" type="number" value="8080"></div>
-      <div class="form-row"><label>协议</label><select id="p-tunnel-scheme"><option value="http">http</option><option value="https">https</option></select></div>
-      <div class="form-grid">
-        <div class="form-row"><label>用户名（可空）</label><input id="p-tunnel-user"></div>
-        <div class="form-row"><label>密码（可空）</label><input id="p-tunnel-pass"></div>
+    <div class="form-row" id="p-sticky-row" style="display:none;"><label>粘性时长 sticky_seconds（秒，会话内固定同一 IP）</label><input id="p-sticky-seconds" type="number" min="0" value="60"></div>
+    <div id="urls-fields" style="display:none;">
+      <div class="form-row">
+        <label>代理地址 URL（每行一条，可批量粘贴）</label>
+        <textarea id="p-urls" rows="5" placeholder="http://用户名:密码@主机:端口&#10;主机2:端口2&#10;用户名3:密码3@主机3:端口3"></textarea>
       </div>
+      <div class="refresh-hint" style="margin:-6px 0 10px;">支持完整或简写地址，省略 http/https/socks 协议时默认 http；一条 = 一个代理，多套餐可粘贴多条。</div>
     </div>
     <div id="ippool-fields" style="display:none;">
       <div class="form-row"><label>提取 API URL</label><input id="p-extract-url" placeholder="https://api.proxycn.com/get"></div>
@@ -620,39 +666,66 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
 
 <!-- 分组弹窗 -->
 <div class="modal-backdrop" id="group-modal">
-  <div class="modal" style="width:760px;">
+  <div class="modal" style="width:840px;">
     <h3 id="group-modal-title">新增分组</h3>
-    <div class="gs-block">
-      <div class="gs-title">基本信息</div>
-      <div class="gs-row">
-        <div class="gs-field"><label>名称（唯一）</label><input id="g-name" placeholder="例如 residential"></div>
-        <div class="gs-field"><label>类型</label><select id="g-type"><option value="">默认</option><option value="static">static</option><option value="free">free</option><option value="tunnel">tunnel</option><option value="high-quality">high-quality</option></select></div>
-        <div class="gs-field"><label>主池存活率阈值</label><input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0"></div>
+    <div class="g-steps" id="g-steps">
+      <div class="g-step active" data-gstep="1"><span class="g-step-num">1</span><span>基本信息</span></div>
+      <div class="g-step" data-gstep="2"><span class="g-step-num">2</span><span>主池与占比</span></div>
+      <div class="g-step" data-gstep="3"><span class="g-step-num">3</span><span>备用池（可选）</span></div>
+      <div class="g-step" data-gstep="4"><span class="g-step-num">4</span><span>网关凭证</span></div>
+    </div>
+    <div class="g-step-panel" id="g-panel-1">
+      <div class="gs-block">
+        <div class="gs-title">基本信息</div>
+        <div class="gs-row">
+          <div class="gs-field"><label>名称（唯一）</label><input id="g-name" placeholder="例如 residential"></div>
+          <div class="gs-field"><label>类型</label><select id="g-type"><option value="">默认</option><option value="static">static</option><option value="free">free</option><option value="tunnel">tunnel</option><option value="high-quality">high-quality</option></select></div>
+          <div class="gs-field"><label>主池存活率阈值</label><input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0"></div>
+        </div>
       </div>
-      <div class="gs-row" style="margin-top:12px;">
-        <div class="gs-field"><label>网关用户名（配置后使用 用户名:密码@域名 作为代理地址）</label><input id="g-username" placeholder="可空"></div>
-        <div class="gs-field"><label>网关密码</label><input id="g-password" placeholder="可空"></div>
+      <div class="gs-block">
+        <div class="gs-title">出口地区</div>
+        <div class="g-region-choice" id="g-region-choice">
+          <label class="region-pill on"><input type="radio" name="g-region" value="" checked> 不限</label>
+          <label class="region-pill"><input type="radio" name="g-region" value="domestic"> 国内 (CN)</label>
+          <label class="region-pill"><input type="radio" name="g-region" value="overseas"> 海外</label>
+        </div>
       </div>
     </div>
-    <div class="gs-block">
-      <div class="gs-title">地区过滤 <span style="font-weight:400;">（可多选，空=不限）</span></div>
-      <div class="region-pills" id="g-regions">
-        <label class="region-pill"><input type="checkbox" value="domestic" onchange="onRegionToggle()"> 国内 (CN)</label>
-        <label class="region-pill"><input type="checkbox" value="overseas" onchange="onRegionToggle()"> 海外</label>
+    <div class="g-step-panel" id="g-panel-2" style="display:none;">
+      <div class="g-pool-toolbar">
+        <div class="gs-title" style="margin:0;">主池 Provider <span style="font-weight:400;color:var(--muted);">（占比动态计算，人工指定即锁定，其余均分）</span></div>
+        <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',false)">清空</button></span>
       </div>
-      <div id="g-region-countries" style="display:none;margin-top:10px;"></div>
-    </div>
-    <div class="gs-block">
-      <div class="gs-title">主池 Provider <span style="font-weight:400;">（使用率 = 负载占比，总和自动保持 100%）</span></div>
       <div class="provider-grid" id="g-primary-pick"></div>
-      <div style="margin-top:10px;font-size:12px;color:var(--muted);">使用率合计：<b id="g-weight-total" style="color:var(--accent);">—</b></div>
+      <div class="g-weight-summary">占比合计 <b id="g-weight-total">0%</b><span class="bar"><span class="fill" id="g-weight-bar" style="width:0%;"></span></span></div>
     </div>
-    <div class="gs-block">
-      <div class="gs-title">备用池 <span style="font-weight:400;">（按等级顺序，第一行最先使用）</span></div>
-      <div id="g-backup-rows"></div>
-      <button class="btn btn-sm magnetic" onclick="addBackupRow()" style="margin-top:8px;">+ 添加备用池</button>
+    <div class="g-step-panel" id="g-panel-3" style="display:none;">
+      <div class="g-pool-toolbar">
+        <div class="gs-title" style="margin:0;">备用池 Provider <span style="font-weight:400;color:var(--muted);">（可选；主池不可用时整体启用，占比规则同主池）</span></div>
+        <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',false)">清空</button></span>
+      </div>
+      <div class="provider-grid" id="g-backup-pick"></div>
+      <div class="g-weight-summary">占比合计 <b id="g-backup-total">0%</b><span class="bar"><span class="fill" id="g-backup-bar" style="width:0%;"></span></span></div>
+      <div class="refresh-hint" style="margin-top:10px;">不设置备用池可跳过，直接进入下一步。</div>
     </div>
-    <div class="form-actions"><button class="btn magnetic" onclick="closeGroupModal()">取消</button><button class="btn btn-primary magnetic" onclick="submitGroup()">保存</button></div>
+    <div class="g-step-panel" id="g-panel-4" style="display:none;">
+      <div class="gs-block">
+        <div class="gs-title">网关凭证（可选）</div>
+        <div class="gs-row">
+          <div class="gs-field"><label>网关用户名</label><input id="g-username" placeholder="配置后可用 用户名:密码@域名:1024 直连"></div>
+          <div class="gs-field"><label>网关密码</label><input id="g-password" placeholder="可空"></div>
+        </div>
+        <div class="refresh-hint" style="margin-top:8px;">配置后即可用 <code>用户名:密码@域名</code> 作为 HTTP 代理地址，直接走本组代理。</div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn magnetic" id="g-prev" style="display:none;" onclick="groupStep(-1)">上一步</button>
+      <span style="flex:1;"></span>
+      <button class="btn magnetic" onclick="closeGroupModal()">取消</button>
+      <button class="btn btn-primary magnetic" id="g-next" onclick="groupStep(1)">下一步</button>
+      <button class="btn btn-primary magnetic" id="g-save" style="display:none;" onclick="submitGroup()">保存</button>
+    </div>
   </div>
 </div>
 
@@ -689,6 +762,10 @@ const PAGE_SIZE = 20;
 let token = localStorage.getItem('pp_token') || '';
 let currentMe = null;
 let state = { status: null, providers: [], proxies: [], proxyPage: 1, groups: [], accounts: [], usage: [] };
+// 各表格的排序状态：key=排序字段, dir=1 升序 / -1 降序
+const sortState = { providers: { key: '', dir: 1 }, proxies: { key: '', dir: 1 }, accounts: { key: '', dir: 1 }, usage: { key: '', dir: 1 }, webhooks: { key: '', dir: 1 } };
+// 各表格的过滤状态
+const filterState = { providers: { type: '', status: '' }, proxies: { kind: '', status: '' } };
 let defaultCheckURLs = [];
 let customCheckURLs = [];
 let proxyAutoRefresh = true;
@@ -699,7 +776,11 @@ let editingProviderName = null;
 let editingAccount = null;
 let editingWebhookUrl = null;
 let editingGroup = null;
-let gBackupRows = [], gPrimaryWeights = {}, gPrimaryLocked = {}, gPrimaryPicked = [];
+let groupStepIndex = 1;
+let poolState = {
+  primary: { picked: [], weights: {}, locked: {} },
+  backup: { picked: [], weights: {}, locked: {} }
+};
 let apiDocLang = 'curl', apiDocSel = -1;
 let siteMeta = { site_name: 'Proxy Pool', registration_enabled: false, theme_default: 'dark' };
 
@@ -720,6 +801,30 @@ const KNOWN_COUNTRY_NAMES = { CN:'中国', US:'美国', JP:'日本', KR:'韩国'
 /* ===== 工具 ===== */
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function isAdmin(){ return currentMe === null ? true : currentMe.admin; }
+// ---- 通用排序 ----
+function thSort(viewId, key, label) {
+  const s = sortState[viewId];
+  const arrow = s.key === key ? (s.dir === 1 ? '▲' : '▼') : '';
+  return `<th class="sortable ${s.key===key?'sorted':''}" onclick="toggleSort('${viewId}','${key}')">${label}<span class="arrow">${arrow}</span></th>`;
+}
+function toggleSort(viewId, key) {
+  const s = sortState[viewId];
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = 1; }
+  const renderMap = { providers: renderProviders, proxies: renderProxies, accounts: renderAccounts, usage: renderUsage, webhooks: renderWebhooks };
+  if (renderMap[viewId]) renderMap[viewId]();
+}
+function sortBy(viewId, arr, getVal) {
+  const s = sortState[viewId];
+  if (!s.key || !getVal) return arr;
+  const dir = s.dir;
+  return arr.slice().sort((a, b) => {
+    const va = getVal(a, s.key), vb = getVal(b, s.key);
+    if (va == null || va === '') return 1;
+    if (vb == null || vb === '') return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb), 'zh-Hans-CN') * dir;
+  });
+}
 function authHeaders(){ return token ? { 'Authorization': 'Bearer ' + token } : {}; }
 function countryName(c){ return KNOWN_COUNTRY_NAMES[c] || c; }
 
@@ -942,15 +1047,37 @@ function providerRegionLabel(countries) {
 }
 function renderProviders() {
   const tb = document.getElementById('provider-tbody');
+  const thead = document.getElementById('provider-thead');
+  if (thead) thead.innerHTML = '<tr>' + thSort('providers','name','名称') + thSort('providers','type','类型') + '<th>共享</th><th>启用</th><th>检测</th>' + thSort('providers','alive','存活/总数') + thSort('providers','region','地区') + thSort('providers','status','状态') + '<th>操作</th></tr>';
   if (!state.providers.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">暂无 Provider，点击「添加 Provider」</td></tr>'; return; }
   const admin = isAdmin();
   const me = (currentMe && currentMe.name) || '';
-  const ordered = state.providers.slice().sort((a,b) => {
-    if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
-    if ((a.type||'') !== (b.type||'')) return (a.type||'').localeCompare(b.type||'');
-    return (a.name||'').localeCompare(b.name||'');
+  const q = (document.getElementById('provider-search')?.value || '').trim().toLowerCase();
+  const f = filterState.providers;
+  let list = state.providers.filter(p => {
+    if (q && !(p.name.toLowerCase().includes(q) || (p.type||'').toLowerCase().includes(q))) return false;
+    if (f.type && p.type !== f.type) return false;
+    if (f.status === 'on' && !p.enabled) return false;
+    if (f.status === 'off' && p.enabled) return false;
+    return true;
   });
-  tb.innerHTML = ordered.map(p => {
+  if (sortState.providers.key) {
+    list = sortBy('providers', list, (p, key) => {
+      if (key === 'name') return p.name;
+      if (key === 'type') return p.type || '';
+      if (key === 'alive') return p.alive;
+      if (key === 'region') return providerRegionLabel(p.countries);
+      if (key === 'status') return p.enabled ? 1 : 0;
+    });
+  } else {
+    list = list.slice().sort((a,b) => {
+      if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
+      if ((a.type||'') !== (b.type||'')) return (a.type||'').localeCompare(b.type||'');
+      return (a.name||'').localeCompare(b.name||'');
+    });
+  }
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">无匹配结果</td></tr>'; return; }
+  tb.innerHTML = list.map(p => {
     const owner = p.config?.owner || '';
     const isGlobal = owner === '';
     const isOwn = admin || (owner !== '' && owner === me);
@@ -974,7 +1101,7 @@ function renderProviders() {
       <td>${p.last_err ? '<span class="badge off">异常</span>' : '<span class="badge on">正常</span>'}</td>
       <td>${ops}</td>
     </tr>`;
-  }).join('');
+  }).join('') || '<tr><td colspan="9" class="empty">无匹配结果</td></tr>';
 }
 
 /* ===== 代理列表 ===== */
@@ -987,9 +1114,31 @@ function latencyBar(latencyMS, maxMS = 3000) {
 }
 function toggleProxyAutoRefresh(on){ proxyAutoRefresh = on; document.getElementById('proxy-autorefresh-label').textContent = on ? '自动刷新' : '已暂停'; if (on) loadProxies(); }
 function renderProxies() {
+  const thead = document.getElementById('proxy-thead');
+  if (thead) thead.innerHTML = '<tr>' + thSort('proxies','addr','地址') + thSort('proxies','kind','类型') + thSort('proxies','country','地区') + thSort('proxies','provider','Provider') + thSort('proxies','status','状态') + thSort('proxies','latency_ms','延迟') + thSort('proxies','weight','权重') + '<th>操作</th></tr>';
   const q = (document.getElementById('proxy-search').value || '').trim().toLowerCase();
-  let filtered = q ? state.proxies.filter(p => p.addr.toLowerCase().includes(q) || p.provider.toLowerCase().includes(q) || (p.country||'').toLowerCase().includes(q)) : state.proxies.slice();
-  filtered.sort((a,b) => { if (!!a.alive !== !!b.alive) return a.alive ? -1 : 1; return (a.latency_ms||Infinity) - (b.latency_ms||Infinity); });
+  const f = filterState.proxies;
+  let filtered = state.proxies.filter(p => {
+    if (q && !(p.addr.toLowerCase().includes(q) || p.provider.toLowerCase().includes(q) || (p.country||'').toLowerCase().includes(q) || (p.kind||'').toLowerCase().includes(q))) return false;
+    if (f.kind === 'free') { if (!p.free) return false; }
+    else if (f.kind && p.kind !== f.kind) return false;
+    if (f.status === 'alive' && !p.alive) return false;
+    if (f.status === 'dead' && p.alive) return false;
+    return true;
+  });
+  if (sortState.proxies.key) {
+    filtered = sortBy('proxies', filtered, (p, key) => {
+      if (key === 'addr') return p.addr;
+      if (key === 'kind') return p.kind;
+      if (key === 'country') return p.country || '';
+      if (key === 'provider') return p.provider;
+      if (key === 'status') return p.alive ? 1 : 0;
+      if (key === 'latency_ms') return p.latency_ms || 0;
+      if (key === 'weight') return p.weight;
+    });
+  } else {
+    filtered.sort((a,b) => { if (!!a.alive !== !!b.alive) return a.alive ? -1 : 1; return (a.latency_ms||Infinity) - (b.latency_ms||Infinity); });
+  }
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   if (state.proxyPage > totalPages) state.proxyPage = totalPages;
   const start = (state.proxyPage-1)*PAGE_SIZE;
@@ -1029,7 +1178,7 @@ function renderGroups() {
       ? `<div class="group-gw"><span class="gw-label">网关</span><code>${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}</code><button class="btn btn-sm magnetic" data-gw="${esc(g.username)}:${esc(g.password)}@${esc(window.location.host)}" onclick="copyGateway(this)">复制</button></div>`
       : '<div class="group-gw"><span class="refresh-hint">未配置网关用户名/密码，无法通过网关访问本组</span></div>';
     const rows = (g.tiers || []).map((t, ti) => {
-      const provNames = ti === 0 ? (g.primary || []) : ((g.backups || [])[ti-1]?.providers || []);
+      const provNames = ti === 0 ? (g.primary || []) : ((g.backups || []).reduce((a, b) => a.concat(b.providers || []), []));
       const chips = provNames.map(n => `<span class="prov-chip ${ti===0?'on':'off'}">${esc(n)}</span>`).join('');
       return `<tr><td>${esc(t.name)} ${ti===0?'<span class="badge on" style="font-size:10px;">主池</span>':'<span class="badge kind" style="font-size:10px;">备用</span>'}</td>
         <td class="mono">${t.alive_count}</td><td class="mono">${t.alive_total}</td>
@@ -1047,12 +1196,14 @@ function renderGroups() {
   }).join('');
 }
 function openGroupModal(name) {
-  editingGroup = null; gBackupRows = []; gPrimaryWeights = {}; gPrimaryLocked = {};
+  editingGroup = null;
+  groupStepIndex = 1;
+  poolState = { primary: { picked: [], weights: {}, locked: {} }, backup: { picked: [], weights: {}, locked: {} } };
   document.getElementById('group-modal-title').textContent = '新增分组';
   ['g-name','g-type','g-username','g-password'].forEach(id => document.getElementById(id).value='');
   document.getElementById('g-min-ratio').value = 0;
-  document.querySelectorAll('#g-regions input[type=checkbox]').forEach(cb => cb.checked=false);
-  renderRegionCountryChecks([]); renderPrimaryPick([]); renderBackupRows();
+  document.querySelectorAll('input[name="g-region"]').forEach(r => r.checked = r.value === '');
+  syncRegionChoice();
   const g = state.groups.find(x => x.group === name);
   if (g) {
     editingGroup = g.group;
@@ -1062,113 +1213,146 @@ function openGroupModal(name) {
     document.getElementById('g-min-ratio').value = g.min_alive_ratio ?? 0;
     document.getElementById('g-username').value = g.username || '';
     document.getElementById('g-password').value = g.password || '';
-    renderRegionCountryChecks(g.regions || []);
-    (g.regions || []).forEach(r => { const cb = document.querySelector(`#g-regions input[value="${esc(r)}"]`); if (cb) cb.checked = true; });
-    gPrimaryWeights = Object.assign({}, g.primary_weights || {});
-    const wNames = Object.keys(gPrimaryWeights);
-    if (wNames.length) {
-      const wSum = wNames.reduce((s,n) => s + (gPrimaryWeights[n]||0), 0);
-      if (wSum !== 100) { let acc=0; wNames.forEach((n,i) => { if (i===wNames.length-1) gPrimaryWeights[n]=100-acc; else { gPrimaryWeights[n]=Math.round((gPrimaryWeights[n]||0)*100/wSum); acc+=gPrimaryWeights[n]; } }); }
-    }
-    Object.keys(gPrimaryWeights).forEach(k => gPrimaryLocked[k]=true);
-    renderPrimaryPick(g.primary || []);
-    gBackupRows = (g.backups || []).map(b => ({ name: b.name||'', min_alive_ratio: b.min_alive_ratio ?? 0, providers: b.providers || [] }));
-    renderBackupRows();
+    const regs = g.regions || [];
+    let rv = '';
+    if (regs.includes('domestic') || regs.includes('CN')) rv = 'domestic';
+    else if (regs.includes('overseas') || regs.length) rv = 'overseas';
+    document.querySelectorAll('input[name="g-region"]').forEach(r => r.checked = r.value === rv);
+    syncRegionChoice();
+    loadPoolFromConfig('primary', g.primary || [], g.primary_weights || {});
+    const bp = []; (g.backups || []).forEach(b => (b.providers || []).forEach(p => { if (!bp.includes(p)) bp.push(p); }));
+    loadPoolFromConfig('backup', bp, g.backup_weights || {});
   }
-  syncRegionCountries();
+  renderPoolPick('primary');
+  renderPoolPick('backup');
+  goGroupStep(1);
   document.getElementById('group-modal').classList.add('show');
 }
-function onRegionToggle(){ syncRegionCountries(); }
-function syncRegionCountries() {
-  const overseas = document.querySelector('#g-regions input[value="overseas"]');
-  const el = document.getElementById('g-region-countries');
-  el.style.display = (overseas && overseas.checked) ? '' : 'none';
+// 从已有配置填充池选择（含权重归一化与锁定）
+function loadPoolFromConfig(kind, picked, weights) {
+  const ps = poolState[kind];
+  ps.picked = picked.slice();
+  ps.weights = Object.assign({}, weights);
+  ps.locked = {};
+  const names = Object.keys(ps.weights);
+  if (names.length) {
+    const sum = names.reduce((s, n) => s + (ps.weights[n] || 0), 0);
+    if (sum !== 100) {
+      let acc = 0;
+      names.forEach((n, i) => { if (i === names.length - 1) ps.weights[n] = 100 - acc; else { ps.weights[n] = Math.round((ps.weights[n] || 0) * 100 / sum); acc += ps.weights[n]; } });
+    }
+    names.forEach(n => ps.locked[n] = true);
+  }
+  rebalancePool(kind);
 }
-function renderRegionCountryChecks(selected) {
-  const sel = new Set(selected || []);
-  const codes = new Set();
-  (state.providers || []).forEach(p => Object.keys(p.countries || {}).forEach(c => { if (c!=='unknown' && c!=='domestic' && c!=='overseas' && c!=='CN') codes.add(c); }));
-  const el = document.getElementById('g-region-countries');
-  if (!codes.size) { el.innerHTML = '<div class="refresh-hint">暂无已识别的国家代码（代理入池后自动补充）</div>'; return; }
-  el.innerHTML = [...codes].sort().map(c => `<label class="region-pill ${sel.has(c)?'on':''}"><input type="checkbox" value="${esc(c)}" ${sel.has(c)?'checked':''}> ${esc(countryName(c))} (${esc(c)})</label>`).join('');
+function syncRegionChoice() {
+  document.querySelectorAll('#g-region-choice .region-pill').forEach(p => {
+    const r = p.querySelector('input');
+    p.classList.toggle('on', r.checked);
+  });
 }
-function renderPrimaryPick(selected) {
-  if (selected) { gPrimaryPicked = selected.slice(); rebalancePrimaryWeights(); }
-  const sel = new Set(gPrimaryPicked);
-  const el = document.getElementById('g-primary-pick');
-  if (!state.providers.length) { el.innerHTML = '<div class="refresh-hint">无可用 provider</div>'; return; }
-  const ordered = state.providers.slice().sort((a,b) => a.name.localeCompare(b.name));
+function goGroupStep(step) {
+  groupStepIndex = Math.min(4, Math.max(1, step));
+  document.querySelectorAll('.g-step').forEach(s => {
+    const n = parseInt(s.dataset.gstep);
+    s.classList.toggle('active', n === groupStepIndex);
+    s.classList.toggle('done', n < groupStepIndex);
+  });
+  for (let i = 1; i <= 4; i++) document.getElementById('g-panel-' + i).style.display = (i === groupStepIndex) ? '' : 'none';
+  document.getElementById('g-prev').style.display = groupStepIndex > 1 ? '' : 'none';
+  document.getElementById('g-next').style.display = groupStepIndex < 4 ? '' : 'none';
+  document.getElementById('g-save').style.display = groupStepIndex === 4 ? '' : 'none';
+}
+function groupStep(delta) { goGroupStep(groupStepIndex + delta); }
+function renderPoolPick(kind) {
+  const ps = poolState[kind];
+  const el = document.getElementById(kind === 'primary' ? 'g-primary-pick' : 'g-backup-pick');
+  if (!el) return;
+  if (!state.providers.length) { el.innerHTML = '<div class="pool-empty">暂无可用 Provider，请先在「代理平台」添加</div>'; updatePoolSummary(kind); return; }
+  const sel = new Set(ps.picked);
+  const ordered = state.providers.slice().sort((a, b) => a.name.localeCompare(b.name));
   el.innerHTML = ordered.map(p => {
     const isOn = sel.has(p.name);
-    const wInput = isOn ? `<span class="pc-weight"><span style="font-size:10px;color:var(--muted);">使用率</span>${gPrimaryLocked[p.name]?'<span class="pc-lock">锁定</span>':''}<input type="number" min="1" max="100" value="${gPrimaryWeights[p.name]||0}" data-weight="${esc(p.name)}" onchange="setPrimaryWeight(this)"><span style="font-size:10px;color:var(--muted);">%</span></span>` : '';
-    return `<label class="prov-card ${isOn?'on':''}"><input type="checkbox" value="${esc(p.name)}" ${isOn?'checked':''}><span class="pc-name">${esc(p.name)}</span><span class="pc-count">存活 ${p.alive}/${p.total}</span>${wInput}</label>`;
+    const region = providerRegionLabel(p.countries);
+    const wInput = isOn ? `<span class="pc-weight"><span style="font-size:10px;color:var(--muted);">占比</span>${ps.locked[p.name] ? '<span class="pc-lock">锁定</span>' : ''}<input type="number" min="1" max="99" value="${ps.weights[p.name] || 0}" data-name="${esc(p.name)}" onchange="setPoolWeight('${kind}', this)"><span style="font-size:10px;color:var(--muted);">%</span></span>` : '';
+    return `<label class="prov-card ${isOn ? 'on' : ''}">
+      <input type="checkbox" value="${esc(p.name)}" ${isOn ? 'checked' : ''}>
+      <span class="pc-name">${esc(p.name)}</span>
+      <span class="pc-count">存活 ${p.alive}/${p.total} · <span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}" style="font-size:9px;">${esc(p.type)}</span></span>
+      <span class="pc-region">${esc(region)}</span>
+      ${wInput}
+    </label>`;
   }).join('');
-  updateWeightTotal();
+  updatePoolSummary(kind);
 }
-function togglePrimaryPick(checked, name) {
-  if (checked) { if (!gPrimaryPicked.includes(name)) gPrimaryPicked.push(name); }
-  else { gPrimaryPicked = gPrimaryPicked.filter(n => n !== name); delete gPrimaryWeights[name]; delete gPrimaryLocked[name]; }
-  rebalancePrimaryWeights(); renderPrimaryPick();
+function poolToggle(kind, checked, name) {
+  const ps = poolState[kind];
+  if (checked) { if (!ps.picked.includes(name)) ps.picked.push(name); }
+  else { ps.picked = ps.picked.filter(n => n !== name); delete ps.weights[name]; delete ps.locked[name]; }
+  rebalancePool(kind); renderPoolPick(kind);
 }
-function rebalancePrimaryWeights() {
-  const picked = gPrimaryPicked.slice(); const n = picked.length;
-  if (!n) { updateWeightTotal(); return; }
-  if (n === 1) { if (!gPrimaryLocked[picked[0]] || !gPrimaryWeights[picked[0]]) gPrimaryWeights[picked[0]] = 100; updateWeightTotal(); return; }
-  const locked = picked.filter(x => gPrimaryLocked[x]); let lockedSum = 0;
-  locked.forEach(x => lockedSum += gPrimaryWeights[x] || 0);
-  const free = picked.filter(x => !gPrimaryLocked[x]); let remaining = 100 - lockedSum;
+function poolToggleAll(kind, on) {
+  const ps = poolState[kind];
+  ps.picked = on ? state.providers.map(p => p.name).slice() : [];
+  ps.weights = {}; ps.locked = {};
+  rebalancePool(kind); renderPoolPick(kind);
+}
+function setPoolWeight(kind, input) {
+  const name = input.dataset.name; const ps = poolState[kind];
+  let w = parseInt(input.value);
+  if (!(w >= 1)) w = 1; if (w > 99) w = 99;
+  ps.weights[name] = w; ps.locked[name] = true;
+  rebalancePool(kind); renderPoolPick(kind);
+}
+function rebalancePool(kind) {
+  const ps = poolState[kind];
+  const picked = ps.picked.slice(); const n = picked.length;
+  if (!n) { updatePoolSummary(kind); return; }
+  if (n === 1) { if (!ps.locked[picked[0]] || !ps.weights[picked[0]]) ps.weights[picked[0]] = 100; updatePoolSummary(kind); return; }
+  const locked = picked.filter(x => ps.locked[x]); let lockedSum = 0;
+  locked.forEach(x => lockedSum += ps.weights[x] || 0);
+  const free = picked.filter(x => !ps.locked[x]); let remaining = 100 - lockedSum;
   if (free.length) {
     if (remaining < free.length) remaining = free.length;
-    const base = Math.floor(remaining / free.length); let rem = remaining - base*free.length;
-    free.forEach((x,i) => gPrimaryWeights[x] = base + (i<rem?1:0));
+    const base = Math.floor(remaining / free.length); let rem = remaining - base * free.length;
+    free.forEach((x, i) => ps.weights[x] = base + (i < rem ? 1 : 0));
   }
-  if (!free.length && lockedSum !== 100) { const last = picked[picked.length-1]; gPrimaryWeights[last] = (gPrimaryWeights[last]||0) + (100-lockedSum); }
-  updateWeightTotal();
+  if (!free.length && lockedSum !== 100) { const last = picked[picked.length - 1]; ps.weights[last] = (ps.weights[last] || 0) + (100 - lockedSum); }
+  updatePoolSummary(kind);
 }
-function updateWeightTotal() {
-  const el = document.getElementById('g-weight-total'); if (!el) return;
-  let sum = 0; gPrimaryPicked.forEach(n => sum += gPrimaryWeights[n] || 0);
-  const bad = gPrimaryPicked.length > 0 && sum !== 100;
-  el.innerHTML = `<b style="color:${bad?'var(--red)':'var(--accent)'}">${sum}%</b><span style="color:var(--muted);"> / 100%</span>${bad?' <span style="color:var(--red);">（需调整为 100%）</span>':''}`;
+function updatePoolSummary(kind) {
+  const isPrimary = kind === 'primary';
+  const totalEl = document.getElementById(isPrimary ? 'g-weight-total' : 'g-backup-total');
+  const barEl = document.getElementById(isPrimary ? 'g-weight-bar' : 'g-backup-bar');
+  const ps = poolState[kind];
+  let sum = 0; ps.picked.forEach(n => sum += ps.weights[n] || 0);
+  if (totalEl) { totalEl.textContent = sum + '%'; totalEl.style.color = (ps.picked.length && sum !== 100) ? 'var(--red)' : 'var(--accent)'; }
+  if (barEl) barEl.style.width = Math.min(100, sum) + '%';
 }
-function setPrimaryWeight(input) {
-  const name = input.dataset.weight; let w = parseInt(input.value);
-  if (!(w>=1)) w = 1; if (w > 99) w = 99;
-  gPrimaryWeights[name] = w; gPrimaryLocked[name] = true;
-  rebalancePrimaryWeights(); renderPrimaryPick();
-}
-function renderBackupRows() {
-  const el = document.getElementById('g-backup-rows');
-  if (!gBackupRows.length) { el.innerHTML = '<div class="refresh-hint">暂无备用池。点击「+ 添加备用池」按顺序添加。</div>'; return; }
-  el.innerHTML = gBackupRows.map((row, i) => {
-    const opts = state.providers.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p => `<option value="${esc(p.name)}">${esc(p.name)} · ${esc(providerRegionLabel(p.countries))} · 存活 ${p.alive}/${p.total}</option>`).join('');
-    const current = (row.providers && row.providers[0]) || '';
-    return `<div class="backup-row"><div class="br-head"><span class="badge kind">第${i+1}备用</span>
-      <select data-bk="${i}" onchange="setBackupProvider(${i}, this.value)"><option value="">-- 选择 Provider --</option>${opts}</select>
-      <input class="br-ratio" type="number" step="0.01" min="0" max="1" value="${row.min_alive_ratio}" title="存活率阈值" oninput="gBackupRows[${i}].min_alive_ratio=parseFloat(this.value)||0">
-      <button class="btn btn-sm btn-danger magnetic" onclick="removeBackupRow(${i})">删除</button></div></div>`;
-  }).join('');
-}
-function setBackupProvider(i, name){ gBackupRows[i].providers = name ? [name] : []; gBackupRows[i].name = gBackupRows[i].name.trim() || ('backup-'+(i+1)); }
-function addBackupRow(){ gBackupRows.push({ name:'', min_alive_ratio:0, providers:[] }); renderBackupRows(); }
-function removeBackupRow(i){ gBackupRows.splice(i,1); renderBackupRows(); }
 function closeGroupModal(){ document.getElementById('group-modal').classList.remove('show'); }
 async function submitGroup() {
   const name = document.getElementById('g-name').value.trim();
   if (!name) { toast('分组名称必填', true); return; }
-  const primary = []; document.querySelectorAll('#g-primary-pick input[type=checkbox]:checked').forEach(cb => primary.push(cb.value));
-  if (!primary.length) { toast('主池 provider 至少勾选一个', true); return; }
+  const pprimary = poolState.primary.picked;
+  if (!pprimary.length) { toast('主池至少选择一个 Provider', true); return; }
   const primary_weights = {}; let wSum = 0;
-  primary.forEach(n => { const w = gPrimaryWeights[n]||0; primary_weights[n]=w; wSum+=w; });
-  if (wSum !== 100) { toast('主池使用率合计须为 100%，当前 ' + wSum + '%', true); return; }
-  const backups = gBackupRows.map((row,i) => ({ name: row.name.trim() || ('backup-'+(i+1)), min_alive_ratio: row.min_alive_ratio||0, providers: row.providers })).filter(b => b.providers.length > 0);
-  const regions = []; document.querySelectorAll('#g-regions input[type=checkbox]:checked, #g-region-countries input[type=checkbox]:checked').forEach(cb => regions.push(cb.value));
+  pprimary.forEach(n => { const w = poolState.primary.weights[n] || 0; primary_weights[n] = w; wSum += w; });
+  if (wSum !== 100) { toast('主池占比合计须为 100%，当前 ' + wSum + '%', true); return; }
+  const pbackup = poolState.backup.picked;
+  const backup_weights = {}; let bSum = 0;
+  pbackup.forEach(n => { const w = poolState.backup.weights[n] || 0; backup_weights[n] = w; bSum += w; });
+  if (pbackup.length && bSum !== 100) { toast('备用池占比合计须为 100%，当前 ' + bSum + '%', true); return; }
+  const backups = pbackup.length ? [{ name: 'backup', min_alive_ratio: 0, providers: pbackup }] : [];
+  let regions = [];
+  const rv = (document.querySelector('input[name="g-region"]:checked') || {}).value || '';
+  if (rv === 'domestic') regions = ['domestic'];
+  else if (rv === 'overseas') regions = ['overseas'];
   const username = document.getElementById('g-username').value.trim(); const password = document.getElementById('g-password').value;
   if ((username && !password) || (!username && password)) { toast('网关用户名与密码必须成对配置', true); return; }
-  const body = { name, type: document.getElementById('g-type').value, min_alive_ratio: parseFloat(document.getElementById('g-min-ratio').value)||0, username, password, primary, primary_weights, backups, regions };
+  const body = { name, type: document.getElementById('g-type').value, min_alive_ratio: parseFloat(document.getElementById('g-min-ratio').value) || 0, username, password, primary: pprimary, primary_weights, backups, backup_weights, regions };
   try {
-    if (editingGroup) { await api('/api/v1/admin/groups/'+encodeURIComponent(editingGroup), { method:'PUT', body: JSON.stringify(body) }); toast('分组已更新'); }
-    else { await api('/api/v1/admin/groups', { method:'POST', body: JSON.stringify(body) }); toast('分组已创建'); }
+    if (editingGroup) { await api('/api/v1/admin/groups/' + encodeURIComponent(editingGroup), { method: 'PUT', body: JSON.stringify(body) }); toast('分组已更新'); }
+    else { await api('/api/v1/admin/groups', { method: 'POST', body: JSON.stringify(body) }); toast('分组已创建'); }
     closeGroupModal(); await loadGroups();
   } catch(e){ toast('保存失败: ' + e.message, true); }
 }
@@ -1186,8 +1370,15 @@ async function copyGateway(btn) {
 /* ===== 账户 ===== */
 function renderAccounts() {
   const tb = document.getElementById('account-tbody');
+  const thead = document.getElementById('account-thead');
+  if (thead) thead.innerHTML = '<tr>' + thSort('accounts','name','名称') + thSort('accounts','role','角色') + '<th>Token</th><th>可用分组</th>' + thSort('accounts','status','启用') + '<th>操作</th></tr>';
   if (!state.accounts.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">未配置账户（鉴权关闭）</td></tr>'; return; }
-  tb.innerHTML = state.accounts.map(a => `<tr>
+  const list = sortBy('accounts', state.accounts, (a, key) => {
+    if (key === 'name') return a.name;
+    if (key === 'role') return a.role;
+    if (key === 'status') return a.enabled ? 1 : 0;
+  });
+  tb.innerHTML = list.map(a => `<tr>
     <td class="mono"><b>${esc(a.name)}</b></td>
     <td><span class="badge ${a.role==='admin'?'on':'kind'}">${esc(a.role)}</span></td>
     <td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;">${esc(a.token)}</td>
@@ -1233,16 +1424,30 @@ async function toggleAccount(name, enabled) {
 /* ===== 用量 ===== */
 function renderUsage() {
   const tb = document.getElementById('usage-tbody');
+  const thead = document.getElementById('usage-thead');
+  if (thead) thead.innerHTML = '<tr>' + thSort('usage','account','账户') + thSort('usage','total','调用次数') + thSort('usage','ok','成功') + '<th>成功率</th></tr>';
   if (!state.usage.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>'; return; }
-  tb.innerHTML = state.usage.map(u => `<tr><td class="mono"><b>${esc(u.account)}</b></td><td>${u.total}</td><td>${u.ok}</td><td>${u.total ? ((u.ok/u.total)*100).toFixed(1)+'%' : '-'}</td></tr>`).join('');
+  const list = sortBy('usage', state.usage, (u, key) => {
+    if (key === 'account') return u.account;
+    if (key === 'total') return u.total;
+    if (key === 'ok') return u.ok;
+  });
+  tb.innerHTML = list.map(u => `<tr><td class="mono"><b>${esc(u.account)}</b></td><td>${u.total}</td><td>${u.ok}</td><td>${u.total ? ((u.ok/u.total)*100).toFixed(1)+'%' : '-'}</td></tr>`).join('');
 }
 
 /* ===== 告警 ===== */
 function renderWebhooks() {
   const tb = document.getElementById('alert-webhook-tbody');
+  const thead = document.getElementById('webhook-thead');
+  if (thead) thead.innerHTML = '<tr>' + thSort('webhooks','remark','备注') + thSort('webhooks','url','URL') + thSort('webhooks','events','事件') + '<th>操作</th></tr>';
   const whs = (alertConfig && alertConfig.webhooks) || [];
   if (!whs.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">暂无 Webhook</td></tr>'; return; }
-  tb.innerHTML = whs.map(w => `<tr>
+  const list = sortBy('webhooks', whs, (w, key) => {
+    if (key === 'remark') return w.remark || '';
+    if (key === 'url') return w.url;
+    if (key === 'events') return (w.events && w.events.length) ? w.events.join(',') : '全部';
+  });
+  tb.innerHTML = list.map(w => `<tr>
     <td>${esc(w.remark || '')}</td>
     <td class="mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;">${esc(w.url)}</td>
     <td>${esc((w.events && w.events.length) ? w.events.join(', ') : '全部')}</td>
@@ -1358,9 +1563,9 @@ function showProviderUsage(name) {
 function openAddProvider() {
   editingProviderName = null;
   document.getElementById('provider-modal-title').textContent = '添加 Provider';
-  ['p-name','p-tunnel-gateway','p-tunnel-user','p-tunnel-pass','p-extract-url','p-extract-user','p-extract-pass','p-country'].forEach(id => document.getElementById(id).value='');
+  ['p-name','p-extract-url','p-extract-user','p-extract-pass','p-country','p-urls'].forEach(id => document.getElementById(id).value='');
   document.getElementById('p-check-interval').value = 0; document.getElementById('p-min-ratio').value = 0; document.getElementById('p-sticky-seconds').value = 60;
-  document.getElementById('p-tunnel-port').value = 8080; document.getElementById('p-refresh').value = 60; document.getElementById('p-expire').value = 600;
+  document.getElementById('p-refresh').value = 60; document.getElementById('p-expire').value = 600;
   document.getElementById('p-type').value = 'tunnel';
   customCheckURLs = []; defaultCheckURLs.forEach(d => d.enabled = true);
   renderCheckURLs(); toggleTunnelFields();
@@ -1378,25 +1583,41 @@ function openEditProvider(name) {
   document.getElementById('p-min-ratio').value = (p.min_alive_ratio !== undefined ? p.min_alive_ratio : cfg.min_alive_ratio) || 0;
   document.getElementById('p-sticky-seconds').value = p.sticky_seconds || cfg.sticky_seconds || 60;
   document.getElementById('p-country').value = cfg.country || '';
+  // 代理地址：优先展示 urls 列表；旧的 tunnel 分字段自动拼回成 URL 展示。
+  document.getElementById('p-urls').value = providerURLsForEdit(cfg).join('\n');
   const saved = (cfg.check_urls || []).map(u => ({ name: u.name||'', url: u.url||'', enabled: u.enabled !== false }));
   defaultCheckURLs.forEach(d => { const m = saved.find(s => s.url === d.url); d.enabled = m ? m.enabled : true; });
   customCheckURLs = saved.filter(s => !defaultCheckURLs.some(d => d.url === s.url));
   if (!(cfg.check_urls || []).length && cfg.check_url) customCheckURLs = [{ name:'', url: cfg.check_url, enabled: true }];
   renderCheckURLs();
-  const t = cfg.tunnel || {}; document.getElementById('p-tunnel-scheme').value = t.scheme||'http'; document.getElementById('p-tunnel-gateway').value = t.gateway||''; document.getElementById('p-tunnel-port').value = t.port||8080; document.getElementById('p-tunnel-user').value = t.username||''; document.getElementById('p-tunnel-pass').value = t.password||'';
   const ip = cfg.ip_pool || {}; document.getElementById('p-extract-url').value = ip.extract_url||''; document.getElementById('p-format').value = ip.format||'text'; document.getElementById('p-refresh').value = ip.refresh_interval_s||60; document.getElementById('p-expire').value = ip.expire_after_s||600; document.getElementById('p-extract-user').value = ip.username||''; document.getElementById('p-extract-pass').value = ip.password||'';
   const fr = cfg.free || {}; document.getElementById('p-free-feed').value = fr.feed_url||''; document.getElementById('p-free-refresh').value = fr.refresh_interval_s||600; document.getElementById('p-free-max-speed').value = fr.max_speed_ms||3000; document.getElementById('p-free-delete-latency').value = fr.delete_latency_ms||3000; document.getElementById('p-free-expire').value = fr.expire_after_s||0;
   toggleTunnelFields();
   document.getElementById('provider-modal').classList.add('show');
 }
+// 把旧配置还原为 URL 列表用于编辑展示（tunnel 分字段 → 单条 URL；urls → 原样）。
+function providerURLsForEdit(cfg) {
+  if (cfg.urls && cfg.urls.length) return cfg.urls.slice();
+  const t = cfg.tunnel;
+  if (t && t.gateway) {
+    const scheme = t.scheme || 'http';
+    const auth = t.username ? (t.username + (t.password ? ':' + t.password : '') + '@') : '';
+    return [scheme + '://' + auth + t.gateway + ':' + (t.port || 8080)];
+  }
+  return [];
+}
+// 把多行 / 逗号 / 分号分隔的代理地址解析成去空的 URL 数组。
+function parseProxyURLList(text) {
+  return String(text || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+}
 function closeModal(){ document.getElementById('provider-modal').classList.remove('show'); }
 function toggleTunnelFields() {
   const type = document.getElementById('p-type').value;
-  document.getElementById('tunnel-fields').style.display = type==='tunnel' ? '' : 'none';
-  const usePool = type==='ip_pool' || type==='sticky';
-  document.getElementById('ippool-fields').style.display = usePool ? '' : 'none';
-  document.getElementById('p-sticky-row').style.display = type==='sticky' ? '' : 'none';
-  document.getElementById('free-fields').style.display = type==='free' ? '' : 'none';
+  const urls = type === 'tunnel' || type === 'sticky';
+  document.getElementById('urls-fields').style.display = urls ? '' : 'none';
+  document.getElementById('p-sticky-row').style.display = type === 'sticky' ? '' : 'none';
+  document.getElementById('ippool-fields').style.display = type === 'ip_pool' ? '' : 'none';
+  document.getElementById('free-fields').style.display = type === 'free' ? '' : 'none';
 }
 function setCheckURLEnabled(kind, idx, on){ const arr = kind==='c'?customCheckURLs:defaultCheckURLs; if (arr[idx]) arr[idx].enabled = !!on; }
 function setCheckURLURL(kind, idx, val){ const arr = kind==='c'?customCheckURLs:defaultCheckURLs; if (arr[idx]) arr[idx].url = val; }
@@ -1416,16 +1637,16 @@ async function submitProvider() {
   if (!check_urls.some(u => u.enabled)) { toast('至少保留一个启用的测试 URL', true); return; }
   body.check_urls = check_urls;
   if (!body.name) { toast('名称不能为空', true); return; }
-  if (type === 'tunnel') {
-    body.tunnel = { scheme: document.getElementById('p-tunnel-scheme').value, gateway: document.getElementById('p-tunnel-gateway').value.trim(), port: parseInt(document.getElementById('p-tunnel-port').value)||8080, username: document.getElementById('p-tunnel-user').value.trim(), password: document.getElementById('p-tunnel-pass').value.trim() };
-    if (!body.tunnel.gateway) { toast('网关地址不能为空', true); return; }
+  if (type === 'tunnel' || type === 'sticky') {
+    body.urls = parseProxyURLList(document.getElementById('p-urls').value);
+    if (!body.urls.length) { toast('请粘贴至少一条代理地址 URL', true); return; }
+    if (type === 'sticky') { body.sticky_seconds = parseInt(document.getElementById('p-sticky-seconds').value)||60; if (body.sticky_seconds <= 0) { toast('粘性时长必须 > 0', true); return; } }
   } else if (type === 'free') {
     body.free = { feed_url: document.getElementById('p-free-feed').value.trim(), refresh_interval_s: parseInt(document.getElementById('p-free-refresh').value)||600, max_speed_ms: parseInt(document.getElementById('p-free-max-speed').value)||3000, delete_latency_ms: parseInt(document.getElementById('p-free-delete-latency').value)||3000, expire_after_s: parseInt(document.getElementById('p-free-expire').value)||0 };
     if (!body.free.feed_url) { toast('免费源 feed_url 不能为空', true); return; }
   } else {
     body.ip_pool = { extract_url: document.getElementById('p-extract-url').value.trim(), format: document.getElementById('p-format').value, refresh_interval_s: parseInt(document.getElementById('p-refresh').value)||60, expire_after_s: parseInt(document.getElementById('p-expire').value)||600, username: document.getElementById('p-extract-user').value.trim(), password: document.getElementById('p-extract-pass').value.trim() };
     if (!body.ip_pool.extract_url) { toast('提取 API 不能为空', true); return; }
-    if (type === 'sticky') { body.sticky_seconds = parseInt(document.getElementById('p-sticky-seconds').value)||60; if (body.sticky_seconds <= 0) { toast('粘性时长必须 > 0', true); return; } }
   }
   try {
     if (editingProviderName) { await api(`/api/v1/admin/providers/${encodeURIComponent(editingProviderName)}`, { method:'PUT', body: JSON.stringify(body) }); toast('Provider 已更新'); }
@@ -1436,32 +1657,32 @@ async function submitProvider() {
 
 /* ===== API 文档 ===== */
 const APIDOC_ENDPOINTS = [
-  { method:'POST', path:'/api/v1/auth/register', auth:'anonymous', title:'注册账户（需在系统设置开启开放注册）', params:[{name:'name',type:'string',req:true,desc:'账户名（至少 3 字符）',in:'body'},{name:'password',type:'string',req:true,desc:'密码（至少 6 字符）',in:'body'}], body:'{"name":"spider01","password":"pass123"}', curl:'curl -X POST {HOST}/api/v1/auth/register \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123"}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/auth/register", json={"name":"spider01","password":"pass123"})\nprint(r.json())', response:'{\n  "ok": true,\n  "token": "<token>",\n  "name": "spider01",\n  "role": "user",\n  "admin": false\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'token',type:'string',desc:'访问令牌'},{name:'name',type:'string',desc:'账户名'},{name:'role',type:'string',desc:'角色，恒为 user'},{name:'admin',type:'boolean',desc:'是否管理员，恒为 false'}] },
-  { method:'POST', path:'/api/v1/auth/login', auth:'anonymous', title:'登录换取 Token', params:[{name:'name',type:'string',req:true,desc:'账户名',in:'body'},{name:'password',type:'string',req:true,desc:'密码',in:'body'}], body:'{"name":"admin","password":"admin123"}', curl:'curl -X POST {HOST}/api/v1/auth/login \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"admin","password":"admin123"}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/auth/login", json={"name":"admin","password":"admin123"})\nprint(r.json())', response:'{\n  "ok": true,\n  "token": "<token>",\n  "name": "admin",\n  "role": "admin",\n  "groups": [],\n  "admin": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'token',type:'string',desc:'访问令牌，后续请求作为 Authorization: Bearer 使用'},{name:'name',type:'string',desc:'账户名'},{name:'role',type:'string',desc:'角色'},{name:'groups',type:'array<string>',desc:'可用分组'},{name:'admin',type:'boolean',desc:'是否管理员'}] },
+  { method:'POST', path:'/api/v1/auth/register', auth:'anonymous', title:'注册账户（需在系统设置开启开放注册）', params:[{name:'name',type:'string',req:true,desc:'账户名（至少 3 字符）',in:'body'},{name:'password',type:'string',req:true,desc:'密码（至少 6 字符）',in:'body'}], body:'{"name":"spider01","password":"pass123"}', curl:'curl -X POST {HOST}/api/v1/auth/register \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123"}\'', py:'import requests\n\nurl = "{HOST}/api/v1/auth/register"\ndata = {\n    "name": "spider01",\n    "password": "pass123"\n}\n\nr = requests.post(url, json=data)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true,\n  "token": "<token>",\n  "name": "spider01",\n  "role": "user",\n  "admin": false\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'token',type:'string',desc:'访问令牌'},{name:'name',type:'string',desc:'账户名'},{name:'role',type:'string',desc:'角色，恒为 user'},{name:'admin',type:'boolean',desc:'是否管理员，恒为 false'}] },
+  { method:'POST', path:'/api/v1/auth/login', auth:'anonymous', title:'登录换取 Token', params:[{name:'name',type:'string',req:true,desc:'账户名',in:'body'},{name:'password',type:'string',req:true,desc:'密码',in:'body'}], body:'{"name":"admin","password":"admin123"}', curl:'curl -X POST {HOST}/api/v1/auth/login \\\n  -H "Content-Type: application/json" \\\n  -d \'{"name":"admin","password":"admin123"}\'', py:'import requests\n\nurl = "{HOST}/api/v1/auth/login"\ndata = {\n    "name": "admin",\n    "password": "admin123"\n}\n\nr = requests.post(url, json=data)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true,\n  "token": "<token>",\n  "name": "admin",\n  "role": "admin",\n  "groups": [],\n  "admin": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'token',type:'string',desc:'访问令牌，后续请求作为 Authorization: Bearer 使用'},{name:'name',type:'string',desc:'账户名'},{name:'role',type:'string',desc:'角色'},{name:'groups',type:'array<string>',desc:'可用分组'},{name:'admin',type:'boolean',desc:'是否管理员'}] },
   { method:'GET', path:'/api/v1/auth/me', auth:'token', title:'当前账户信息', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/auth/me', py:'import requests\n\nr = requests.get("{HOST}/api/v1/auth/me", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "name": "admin",\n  "role": "admin",\n  "groups": [],\n  "admin": true\n}', resp_fields:[{name:'name',type:'string',desc:'账户名'},{name:'role',type:'string',desc:'角色'},{name:'groups',type:'array<string>',desc:'可用分组'},{name:'admin',type:'boolean',desc:'是否管理员'}] },
   { method:'GET', path:'/api/v1/proxy', auth:'token', title:'取一个代理', params:[{name:'group',type:'string',req:false,desc:'调度分组名，缺省用第一个分组',in:'query'},{name:'sticky_seconds',type:'integer',req:false,desc:'>0 开启粘性会话',in:'query'},{name:'client_id',type:'string',req:false,desc:'客户端标识，配合 sticky_seconds',in:'query'}], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxy?group=charlespikachu-free"', py:'import requests\n\nr = requests.get("{HOST}/api/v1/proxy", params={"group":"charlespikachu-free"}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true,\n  "proxy": {\n    "id": "charlespikachu-free:1.2.3.4:8080",\n    "scheme": "http", "host": "1.2.3.4", "port": 8080,\n    "provider": "charlespikachu-free", "type": "free", "addr": "1.2.3.4:8080"\n  }\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'proxy.id',type:'string',desc:'代理 ID'},{name:'proxy.scheme',type:'string',desc:'协议'},{name:'proxy.host',type:'string',desc:'IP/域名'},{name:'proxy.port',type:'integer',desc:'端口'},{name:'proxy.provider',type:'string',desc:'Provider'},{name:'proxy.type',type:'string',desc:'类型'},{name:'proxy.addr',type:'string',desc:'host:port'}] },
   { method:'GET', path:'/api/v1/proxies', auth:'token', title:'批量取代理', params:[{name:'count',type:'integer',req:false,desc:'数量 1~100',in:'query'},{name:'group',type:'string',req:false,desc:'分组名',in:'query'}], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/proxies?count=5&group=charlespikachu-free"', py:'import requests\n\nr = requests.get("{HOST}/api/v1/proxies", params={"count":5,"group":"charlespikachu-free"}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true,\n  "proxies": [{"id":"...","scheme":"http","host":"1.2.3.4","port":8080,"type":"free","addr":"1.2.3.4:8080"}]\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'proxies',type:'array<object>',desc:'代理对象数组'}] },
-  { method:'POST', path:'/api/v1/proxy/{id}/report', auth:'token', title:'上报使用结果', params:[{name:'{id}',type:'string',req:true,desc:'代理 ID',in:'path'},{name:'success',type:'boolean',req:true,desc:'是否成功',in:'body'},{name:'latency_ms',type:'integer',req:false,desc:'延迟毫秒',in:'body'}], body:'{"success":true,"latency_ms":120}', curl:'curl -X POST "{HOST}/api/v1/proxy/{id}/report" \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"success":true,"latency_ms":120}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/proxy/{id}/report", json={"success":True,"latency_ms":120}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
-  { method:'POST', path:'/api/v1/feedback', auth:'token', title:'上报使用结果（按 ID 替代接口）', params:[{name:'id',type:'string',req:true,desc:'代理 ID',in:'body'},{name:'success',type:'boolean',req:true,desc:'是否成功',in:'body'}], body:'{"id":"...","success":false}', curl:'curl -X POST {HOST}/api/v1/feedback \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"id":"...","success":false}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/feedback", json={"id":"...","success":False}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'POST', path:'/api/v1/proxy/{id}/report', auth:'token', title:'上报使用结果', params:[{name:'{id}',type:'string',req:true,desc:'代理 ID',in:'path'},{name:'success',type:'boolean',req:true,desc:'是否成功',in:'body'},{name:'latency_ms',type:'integer',req:false,desc:'延迟毫秒',in:'body'}], body:'{"success":true,"latency_ms":120}', curl:'curl -X POST "{HOST}/api/v1/proxy/{id}/report" \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"success":true,"latency_ms":120}\'', py:'import requests\n\nurl = "{HOST}/api/v1/proxy/{id}/report"\ndata = {"success": True, "latency_ms": 120}\n\nr = requests.post(url, json=data, headers={"Authorization": "Bearer {TOKEN}"})\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'POST', path:'/api/v1/feedback', auth:'token', title:'上报使用结果（按 ID 替代接口）', params:[{name:'id',type:'string',req:true,desc:'代理 ID',in:'body'},{name:'success',type:'boolean',req:true,desc:'是否成功',in:'body'}], body:'{"id":"...","success":false}', curl:'curl -X POST {HOST}/api/v1/feedback \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"id":"...","success":false}\'', py:'import requests\n\nurl = "{HOST}/api/v1/feedback"\ndata = {"id": "...", "success": False}\nheaders = {"Authorization": "Bearer {TOKEN}"}\n\nr = requests.post(url, json=data, headers=headers)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'GET', path:'/api/v1/status', auth:'token', title:'服务状态概览', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/status', py:'import requests\n\nr = requests.get("{HOST}/api/v1/status", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true,\n  "total": 60,\n  "alive": 39,\n  "by_provider": {"providers": [{"provider":"...","type":"free","total":60,"alive":39}]},\n  "groups": []\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'},{name:'total',type:'integer',desc:'代理总数'},{name:'alive',type:'integer',desc:'存活数'},{name:'by_provider.providers',type:'array<object>',desc:'按 Provider 汇总'},{name:'groups',type:'array<object>',desc:'分组分层状态'}] },
   { method:'GET', path:'/healthz', auth:'anonymous', title:'存活探针', params:[], body:'', curl:'curl {HOST}/healthz', py:'import requests\n\nprint(requests.get("{HOST}/healthz").text)', response:'ok', resp_fields:[{name:'body',type:'text',desc:'存活时返回 ok'}] },
   { method:'GET', path:'/api/v1/admin/providers', auth:'admin', title:'Provider 列表', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/providers', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/providers", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "providers": [{"name":"...","type":"free","enabled":true,"total":60,"alive":39}],\n  "default_check_urls": [{"name":"ipapi-cc","url":"http://ip-api.com/line/?fields=countryCode","enabled":true}]\n}', resp_fields:[{name:'providers',type:'array<object>',desc:'Provider 列表'},{name:'default_check_urls',type:'array<object>',desc:'全局默认检测 URL'}] },
-  { method:'POST', path:'/api/v1/admin/providers', auth:'admin', title:'新增 Provider', params:[{name:'name',type:'string',req:true,desc:'名称',in:'body'},{name:'type',type:'string',req:true,desc:'tunnel/ip_pool/sticky/free',in:'body'},{name:'enabled',type:'boolean',req:false,desc:'默认 true',in:'body'}], body:'{"name":"my-tunnel-01","type":"tunnel","enabled":true,"check_urls":[{"name":"httpbin","url":"http://httpbin.org/ip","enabled":true}],"tunnel":{"scheme":"http","gateway":"tunnel.example.com","port":8080}}', curl:'curl -X POST {HOST}/api/v1/admin/providers \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"my-tunnel-01","type":"tunnel","tunnel":{"scheme":"http","gateway":"tunnel.example.com","port":8080}}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/admin/providers", json={"name":"my-tunnel-01","type":"tunnel","tunnel":{"scheme":"http","gateway":"tunnel.example.com","port":8080}}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'POST', path:'/api/v1/admin/providers', auth:'admin', title:'新增 Provider', params:[{name:'name',type:'string',req:true,desc:'名称',in:'body'},{name:'type',type:'string',req:true,desc:'tunnel/ip_pool/sticky/free',in:'body'},{name:'enabled',type:'boolean',req:false,desc:'默认 true',in:'body'}], body:'{"name":"my-tunnel-01","type":"tunnel","enabled":true,"urls":["http://user:pass@tunnel.example.com:8080"]}', curl:'curl -X POST {HOST}/api/v1/admin/providers \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"my-tunnel-01","type":"tunnel","urls":["http://user:pass@tunnel.example.com:8080"]}\'', py:'import requests\n\nurl = "{HOST}/api/v1/admin/providers"\ndata = {\n    "name": "my-tunnel-01",\n    "type": "tunnel",\n    "urls": ["http://user:pass@tunnel.example.com:8080"]\n}\nheaders = {"Authorization": "Bearer {TOKEN}"}\n\nr = requests.post(url, json=data, headers=headers)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'DELETE', path:'/api/v1/admin/providers/{name}', auth:'admin', title:'删除 Provider', params:[{name:'{name}',type:'string',req:true,desc:'Provider 名称',in:'path'}], body:'', curl:'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/my-tunnel-01"', py:'import requests\n\nr = requests.delete("{HOST}/api/v1/admin/providers/my-tunnel-01", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'POST', path:'/api/v1/admin/providers/{name}/refresh', auth:'admin', title:'立即刷新采集', params:[{name:'{name}',type:'string',req:true,desc:'名称',in:'path'}], body:'', curl:'curl -X POST -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/providers/{name}/refresh"', py:'import requests\n\nr = requests.post("{HOST}/api/v1/admin/providers/{name}/refresh", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'GET', path:'/api/v1/admin/proxies', auth:'admin', title:'代理明细', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/proxies', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/proxies", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "proxies": [{"id":"...","addr":"1.2.3.4:8080","kind":"free","provider":"...","alive":true,"latency_ms":120,"weight":1,"free":true}]\n}', resp_fields:[{name:'proxies',type:'array<object>',desc:'代理明细'}] },
   { method:'DELETE', path:'/api/v1/admin/proxies/{id}', auth:'admin', title:'删除单个代理', params:[{name:'{id}',type:'string',req:true,desc:'代理 ID',in:'path'}], body:'', curl:'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/proxies/{id}"', py:'import requests\n\nr = requests.delete("{HOST}/api/v1/admin/proxies/{id}", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'POST', path:'/api/v1/admin/health/check', auth:'admin', title:'手动触发一轮健康检查', params:[], body:'', curl:'curl -X POST -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/health/check', py:'import requests\n\nr = requests.post("{HOST}/api/v1/admin/health/check", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'GET', path:'/api/v1/admin/groups', auth:'admin', title:'调度分组状态', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/groups', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/groups", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "groups": [{"group":"residential","type":"static","tiers":[{"name":"primary","alive_count":39,"alive_total":60,"min_alive_ratio":0.5,"usable":true}],"primary":["mock-sticky"],"primary_weights":{"mock-sticky":100},"backups":[],"username":"residential"}]\n}', resp_fields:[{name:'groups',type:'array<object>',desc:'分组列表'}] },
-  { method:'POST', path:'/api/v1/admin/groups', auth:'admin', title:'新增调度分组', params:[{name:'name',type:'string',req:true,desc:'分组名',in:'body'},{name:'primary',type:'array<string>',req:true,desc:'主池 provider',in:'body'},{name:'primary_weights',type:'object',req:false,desc:'主池权重（%），总和 100',in:'body'},{name:'backups',type:'array<object>',req:false,desc:'备用池',in:'body'}], body:'{"name":"residential","type":"static","min_alive_ratio":0.5,"primary":["mock-sticky"],"primary_weights":{"mock-sticky":100}}', curl:'curl -X POST {HOST}/api/v1/admin/groups \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"residential","primary":["mock-sticky"]}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/admin/groups", json={"name":"residential","primary":["mock-sticky"]}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'POST', path:'/api/v1/admin/groups', auth:'admin', title:'新增调度分组', params:[{name:'name',type:'string',req:true,desc:'分组名',in:'body'},{name:'primary',type:'array<string>',req:true,desc:'主池 provider',in:'body'},{name:'primary_weights',type:'object',req:false,desc:'主池权重（%），总和 100',in:'body'},{name:'backups',type:'array<object>',req:false,desc:'备用池',in:'body'}], body:'{"name":"residential","type":"static","min_alive_ratio":0.5,"primary":["mock-sticky"],"primary_weights":{"mock-sticky":100}}', curl:'curl -X POST {HOST}/api/v1/admin/groups \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"residential","primary":["mock-sticky"]}\'', py:'import requests\n\nurl = "{HOST}/api/v1/admin/groups"\ndata = {\n    "name": "residential",\n    "primary": ["mock-sticky"],\n    "primary_weights": {"mock-sticky": 100}\n}\nheaders = {"Authorization": "Bearer {TOKEN}"}\n\nr = requests.post(url, json=data, headers=headers)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'DELETE', path:'/api/v1/admin/groups', auth:'admin', title:'删除调度分组', params:[{name:'name',type:'string',req:true,desc:'分组名',in:'query'}], body:'', curl:'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/groups?name=residential"', py:'import requests\n\nr = requests.delete("{HOST}/api/v1/admin/groups", params={"name":"residential"}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'GET', path:'/api/v1/admin/accounts', auth:'admin', title:'账户列表', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/accounts', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/accounts", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "accounts": [{"name":"admin","role":"admin","groups":[],"enabled":true}]\n}', resp_fields:[{name:'accounts',type:'array<object>',desc:'账户列表'}] },
-  { method:'POST', path:'/api/v1/admin/accounts', auth:'admin', title:'新增账户', params:[{name:'name',type:'string',req:true,desc:'账户名',in:'body'},{name:'password',type:'string',req:false,desc:'密码',in:'body'},{name:'role',type:'string',req:true,desc:'admin/user',in:'body'}], body:'{"name":"spider01","password":"pass123","role":"user","groups":[],"enabled":true}', curl:'curl -X POST {HOST}/api/v1/admin/accounts \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123","role":"user"}\'', py:'import requests\n\nr = requests.post("{HOST}/api/v1/admin/accounts", json={"name":"spider01","password":"pass123","role":"user"}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'POST', path:'/api/v1/admin/accounts', auth:'admin', title:'新增账户', params:[{name:'name',type:'string',req:true,desc:'账户名',in:'body'},{name:'password',type:'string',req:false,desc:'密码',in:'body'},{name:'role',type:'string',req:true,desc:'admin/user',in:'body'}], body:'{"name":"spider01","password":"pass123","role":"user","groups":[],"enabled":true}', curl:'curl -X POST {HOST}/api/v1/admin/accounts \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"name":"spider01","password":"pass123","role":"user"}\'', py:'import requests\n\nurl = "{HOST}/api/v1/admin/accounts"\ndata = {\n    "name": "spider01",\n    "password": "pass123",\n    "role": "user"\n}\nheaders = {"Authorization": "Bearer {TOKEN}"}\n\nr = requests.post(url, json=data, headers=headers)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'DELETE', path:'/api/v1/admin/accounts', auth:'admin', title:'删除账户', params:[{name:'name',type:'string',req:true,desc:'账户名',in:'query'}], body:'', curl:'curl -X DELETE -H "Authorization: Bearer {TOKEN}" "{HOST}/api/v1/admin/accounts?name=spider01"', py:'import requests\n\nr = requests.delete("{HOST}/api/v1/admin/accounts", params={"name":"spider01"}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'GET', path:'/api/v1/admin/usage', auth:'admin', title:'调用统计', params:[{name:'account',type:'string',req:false,desc:'只看某账户',in:'query'}], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/usage', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/usage", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "accounts": [{"account":"admin","total":128,"ok":120}]\n}', resp_fields:[{name:'accounts',type:'array<object>',desc:'按账户汇总'}] },
   { method:'GET', path:'/api/v1/admin/alerts', auth:'admin', title:'告警配置', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/alerts', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/alerts", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "webhooks": [],\n  "email": {"smtp_host":"","smtp_port":587,"username":"","to":[],"events":[]},\n  "dedup_seconds": 300,\n  "monitor_interval_s": 15,\n  "recover_interval_s": 3600\n}', resp_fields:[{name:'webhooks',type:'array<object>',desc:'Webhook 列表'},{name:'email',type:'object',desc:'邮件配置'},{name:'dedup_seconds',type:'integer',desc:'去重窗口'},{name:'monitor_interval_s',type:'integer',desc:'监控间隔'},{name:'recover_interval_s',type:'integer',desc:'恢复间隔'}] },
   { method:'GET', path:'/api/v1/admin/settings', auth:'admin', title:'系统设置', params:[], body:'', curl:'curl -H "Authorization: Bearer {TOKEN}" {HOST}/api/v1/admin/settings', py:'import requests\n\nr = requests.get("{HOST}/api/v1/admin/settings", headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "site_name": "Proxy Pool",\n  "registration_enabled": false,\n  "theme_default": "dark",\n  "health_check": {"interval_s":60,"timeout_ms":6000,"concurrency":256,"max_fails":3,"check_urls":[{"name":"ipapi-cc","url":"http://ip-api.com/line/?fields=countryCode","enabled":true}]}\n}', resp_fields:[{name:'site_name',type:'string',desc:'站点名称'},{name:'registration_enabled',type:'boolean',desc:'是否开放注册'},{name:'theme_default',type:'string',desc:'默认主题'},{name:'health_check',type:'object',desc:'健康检查参数'}] },
-  { method:'PUT', path:'/api/v1/admin/settings', auth:'admin', title:'更新系统设置', params:[{name:'site_name',type:'string',req:true,desc:'站点名称',in:'body'},{name:'registration_enabled',type:'boolean',req:false,desc:'开放注册',in:'body'},{name:'theme_default',type:'string',req:false,desc:'默认主题',in:'body'},{name:'health_check',type:'object',req:false,desc:'健康检查参数',in:'body'}], body:'{"site_name":"Proxy Pool","registration_enabled":true,"theme_default":"dark","health_check":{"interval_s":60,"timeout_ms":6000,"concurrency":256,"max_fails":3,"check_urls":[]}}', curl:'curl -X PUT {HOST}/api/v1/admin/settings \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"site_name":"Proxy Pool","registration_enabled":true}\'', py:'import requests\n\nr = requests.put("{HOST}/api/v1/admin/settings", json={"site_name":"Proxy Pool","registration_enabled":True}, headers={"Authorization":"Bearer {TOKEN}"})\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
+  { method:'PUT', path:'/api/v1/admin/settings', auth:'admin', title:'更新系统设置', params:[{name:'site_name',type:'string',req:true,desc:'站点名称',in:'body'},{name:'registration_enabled',type:'boolean',req:false,desc:'开放注册',in:'body'},{name:'theme_default',type:'string',req:false,desc:'默认主题',in:'body'},{name:'health_check',type:'object',req:false,desc:'健康检查参数',in:'body'}], body:'{"site_name":"Proxy Pool","registration_enabled":true,"theme_default":"dark","health_check":{"interval_s":60,"timeout_ms":6000,"concurrency":256,"max_fails":3,"check_urls":[]}}', curl:'curl -X PUT {HOST}/api/v1/admin/settings \\\n  -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \\\n  -d \'{"site_name":"Proxy Pool","registration_enabled":true}\'', py:'import requests\n\nurl = "{HOST}/api/v1/admin/settings"\ndata = {"site_name": "Proxy Pool", "registration_enabled": True}\nheaders = {"Authorization": "Bearer {TOKEN}"}\n\nr = requests.put(url, json=data, headers=headers)\nprint(r.status_code)\nprint(r.json())', response:'{\n  "ok": true\n}', resp_fields:[{name:'ok',type:'boolean',desc:'是否成功'}] },
   { method:'ALL', path:'代理网关 (HTTP Proxy Gateway)', auth:'anonymous', title:'通过代理网关直接中转请求', desc:'两种用法：1) 原生 HTTP 正向代理，客户端用 用户名:密码@host 作为代理地址；2) 路径式 GET /api/v1/gw?url=<目标>，带 Basic 凭证。', params:[{name:'user:pass',type:'string',req:true,desc:'分组凭证',in:'path'},{name:'目标 URL',type:'string',req:true,desc:'任意 http/https 目标',in:'path'}], body:'', curl:'curl -x 用户名:密码@{HOST} http://baidu.com\n# 路径式：\ncurl -u 用户名:密码 "{HOST}/api/v1/gw?url=http://baidu.com"', py:'import requests\n\nr = requests.get("http://baidu.com", proxies={"http":"http://用户名:密码@{HOST}","https":"http://用户名:密码@{HOST}"})\nprint(r.status_code)', response:'<目标站点响应内容>', resp_fields:[{name:'HTTP(S) 响应',type:'any',desc:'网关从本组取实时代理转发，主备切换透明'}] },
 ];
 function apidocVisibleEndpoints(){ return APIDOC_ENDPOINTS.map((ep,i)=>({ep,i})).filter(x => !(x.ep.auth==='admin' && !isAdmin())); }
@@ -1494,12 +1715,12 @@ function renderAPIDocDetail(i) {
     </div>
     <div class="refresh-hint" style="margin-bottom:14px;">${esc(ep.title)}${ep.desc ? ' · ' + esc(ep.desc) : ''}</div>
     ${paramsHtml}
-    ${ep.body ? `<div class="apidoc-section"><h3>请求体 (JSON)</h3><pre class="code-block">${esc(ep.body)}</pre></div>` : ''}
+    ${ep.body ? `<div class="apidoc-section"><h3>请求体 (JSON)</h3><div class="apidoc-code-scroll"><pre class="code-block">${esc(ep.body)}</pre></div></div>` : ''}
     <div class="apidoc-section"><h3>调用案例</h3>
       <div class="lang-tabs"><span class="lang-tab ${apiDocLang==='curl'?'active':''}" onclick="setApiLang('curl')">curl</span><span class="lang-tab ${apiDocLang==='python'?'active':''}" onclick="setApiLang('python')">Python</span><button class="btn btn-sm btn-green magnetic" style="margin-left:auto;" onclick="copyText(this,'code')">复制</button></div>
-      <pre class="code-block" id="code">${esc(code)}</pre></div>
+      <div class="apidoc-code-scroll"><pre class="code-block" id="code">${esc(code)}</pre></div></div>
     ${respFieldsHtml}
-    <div class="apidoc-section"><h3>响应案例</h3><pre class="code-block" id="resp">${esc(ep.response)}</pre></div>
+    <div class="apidoc-section"><h3>响应案例</h3><div class="apidoc-code-scroll"><pre class="code-block" id="resp">${esc(ep.response)}</pre></div></div>
   </div>`;
 }
 function setApiLang(lang){ apiDocLang = lang; renderAPIDocDetail(apiDocSel); }
@@ -1513,9 +1734,14 @@ async function copyText(btn, id) {
 document.getElementById('provider-modal').addEventListener('click', e => { if (e.target === document.getElementById('provider-modal')) closeModal(); });
 document.getElementById('group-modal').addEventListener('click', e => { if (e.target === document.getElementById('group-modal')) closeGroupModal(); });
 document.getElementById('group-modal').addEventListener('change', e => {
+  if (e.target.type === 'radio') { syncRegionChoice(); return; }
   if (e.target.type !== 'checkbox') return;
-  const card = e.target.closest('.prov-card, .region-pill'); if (card) card.classList.toggle('on', e.target.checked);
-  const provCard = e.target.closest('.prov-card'); if (provCard) togglePrimaryPick(e.target.checked, e.target.value);
+  const card = e.target.closest('.prov-card'); if (card) card.classList.toggle('on', e.target.checked);
+  const provCard = e.target.closest('.prov-card');
+  if (provCard) {
+    const kind = provCard.closest('#g-backup-pick') ? 'backup' : 'primary';
+    poolToggle(kind, e.target.checked, e.target.value);
+  }
 });
 document.getElementById('webhook-modal').addEventListener('click', e => { if (e.target === document.getElementById('webhook-modal')) closeWebhookModal(); });
 document.getElementById('acct-modal').addEventListener('click', e => { if (e.target === document.getElementById('acct-modal')) closeAccountModal(); });
