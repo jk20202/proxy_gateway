@@ -8,7 +8,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +26,7 @@ import (
 	"proxy-pool/internal/store"
 )
 
-//go:embed web/index.html web/login.html
+//go:embed web/index.html web/login.html web/register.html
 var webFS embed.FS
 
 type ProviderManager interface {
@@ -67,12 +66,11 @@ type Server struct {
 	auth         *auth.Manager
 	usage        *store.Store
 	groups       []config.GroupCfg
-	groupsFile   string
 	groupsMu     sync.RWMutex
-	groupsFromDB bool
 	gateway      *gateway.Gateway
 	gwHandler    fasthttp.RequestHandler
-	db           *persist.MySQL
+	db           *persist.File
+	settings     *SettingsStore
 }
 
 func New(cfg config.Config, mgr *pool.Manager, checker *health.Checker, logger *slog.Logger) *Server {
@@ -116,31 +114,36 @@ func (s *Server) AttachGroups(g []config.GroupCfg) {
 	s.groups = g
 }
 
-// AttachMySQL wires optional MySQL persistence for group configs. When groups
-// already exist in the database they take precedence over the file/config so
+// AttachStore wires optional file persistence for group configs. When groups
+// already exist in the file they take precedence over the file/config so
 // runtime edits survive restarts.
-func (s *Server) AttachMySQL(db *persist.MySQL) {
+func (s *Server) AttachStore(db *persist.File) {
 	s.db = db
 	if db == nil {
 		return
 	}
 	fromDB, err := db.LoadGroups()
 	if err != nil {
-		s.logger.Error("failed to load groups from mysql", "err", err)
+		s.logger.Error("failed to load groups from file", "err", err)
 		return
 	}
 	if len(fromDB) > 0 {
 		s.groupsMu.Lock()
 		s.groups = fromDB
-		s.groupsFromDB = true
 		s.groupsMu.Unlock()
 		s.pool.SetGroups(fromDB)
 	} else if len(s.groups) > 0 {
-		// seed the database from the configured groups on first start
+		// seed the file from the configured groups on first start
 		if err := db.ReplaceGroups(s.groups); err != nil {
-			s.logger.Error("failed to seed groups into mysql", "err", err)
+			s.logger.Error("failed to seed groups into file", "err", err)
 		}
 	}
+}
+
+// AttachSettings wires the system settings store (registration switch, theme,
+// site name and health-check tuning). Optional; nil means default settings.
+func (s *Server) AttachSettings(st *SettingsStore) {
+	s.settings = st
 }
 
 type handlerFunc func(ctx *fasthttp.RequestCtx)
@@ -160,6 +163,9 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		{"GET", "/healthz", s.handleHealthz},
 		{"POST", "/api/v1/auth/login", s.handleLogin},
 		{"GET", "/api/v1/auth/me", s.handleMe},
+
+		{"GET", "/api/v1/admin/settings", s.handleGetSettings},
+		{"PUT", "/api/v1/admin/settings", s.handleUpdateSettings},
 
 		{"GET", "/api/v1/admin/providers", s.handleListProviders},
 		{"POST", "/api/v1/admin/providers", s.handleAddProvider},
@@ -199,6 +205,12 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 		ctx.SetBody(loginHTML)
 	}
 
+	registerHTML, _ := webFS.ReadFile("web/register.html")
+	registerHandler := func(ctx *fasthttp.RequestCtx) {
+		ctx.SetContentType("text/html; charset=utf-8")
+		ctx.SetBody(registerHTML)
+	}
+
 	notFound := func(ctx *fasthttp.RequestCtx) {
 		ctx.Error("not found", fasthttp.StatusNotFound)
 	}
@@ -236,8 +248,27 @@ func (s *Server) Handler() fasthttp.RequestHandler {
 			return
 		}
 
+		if path == "/register" {
+			if method == "GET" {
+				registerHandler(ctx)
+				return
+			}
+			ctx.Error("method not allowed", fasthttp.StatusMethodNotAllowed)
+			return
+		}
+
 		if method == "POST" && path == "/api/v1/auth/login" {
 			s.handleLogin(ctx)
+			return
+		}
+
+		if method == "POST" && path == "/api/v1/auth/register" {
+			s.handleRegister(ctx)
+			return
+		}
+
+		if method == "GET" && path == "/api/v1/site" {
+			s.handleSite(ctx)
 			return
 		}
 
@@ -1251,6 +1282,116 @@ func (s *Server) handleMe(ctx *fasthttp.RequestCtx) {
 	})
 }
 
+// handleSite returns public site metadata (name, whether registration is open,
+// and the default theme) so the login/register pages can render appropriately
+// without any authentication.
+func (s *Server) handleSite(ctx *fasthttp.RequestCtx) {
+	st := s.currentSettings()
+	writeJSON(ctx, fasthttp.StatusOK, map[string]any{
+		"site_name":            st.SiteName,
+		"registration_enabled": st.RegistrationEnabled,
+		"theme_default":        st.ThemeDefault,
+	})
+}
+
+// currentSettings returns the current settings, or a safe default when no
+// settings store is attached.
+func (s *Server) currentSettings() config.Settings {
+	if s.settings != nil {
+		return s.settings.Get()
+	}
+	return config.Settings{
+		SiteName:            "Proxy Pool",
+		RegistrationEnabled: false,
+		ThemeDefault:        "dark",
+	}
+}
+
+// handleRegister creates a new user-role account, gated by the registration
+// switch. New accounts always get the "user" role and are enabled immediately.
+func (s *Server) handleRegister(ctx *fasthttp.RequestCtx) {
+	if s.auth == nil || s.auth.Empty() {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "registration not available"})
+		return
+	}
+	st := s.currentSettings()
+	if !st.RegistrationEnabled {
+		writeJSON(ctx, fasthttp.StatusForbidden, map[string]string{"error": "registration is disabled"})
+		return
+	}
+	var req struct {
+		Name     string `json:"name"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" || len(name) < 3 {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "username must be at least 3 characters"})
+		return
+	}
+	if len(req.Password) < 6 {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "password must be at least 6 characters"})
+		return
+	}
+	// Prevent a regular registration from claiming the admin identity.
+	if name == "admin" {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "username is reserved"})
+		return
+	}
+	if err := s.auth.AddAccount(config.AccountCfg{
+		Name:     name,
+		Password: req.Password,
+		Role:     "user",
+		Enabled:  true,
+	}); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	acct, ok := s.auth.Login(name, req.Password)
+	if !ok {
+		writeJSON(ctx, fasthttp.StatusOK, map[string]any{"ok": true, "name": name})
+		return
+	}
+	writeJSON(ctx, fasthttp.StatusOK, map[string]any{
+		"ok":     true,
+		"token":  acct.Token,
+		"name":   acct.Name,
+		"role":   acct.Role,
+		"groups": acct.Groups,
+		"admin":  acct.IsAdmin(),
+	})
+}
+
+// handleGetSettings returns the full system settings (admin only).
+func (s *Server) handleGetSettings(ctx *fasthttp.RequestCtx) {
+	if s.settings == nil {
+		writeJSON(ctx, fasthttp.StatusServiceUnavailable, map[string]string{"error": "settings store not configured"})
+		return
+	}
+	writeJSON(ctx, fasthttp.StatusOK, s.settings.Get())
+}
+
+// handleUpdateSettings applies a new system settings object (admin only).
+func (s *Server) handleUpdateSettings(ctx *fasthttp.RequestCtx) {
+	if s.settings == nil {
+		writeJSON(ctx, fasthttp.StatusServiceUnavailable, map[string]string{"error": "settings store not configured"})
+		return
+	}
+	var cfg config.Settings
+	if err := json.Unmarshal(ctx.PostBody(), &cfg); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if err := s.settings.Update(cfg); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleListAccounts(ctx *fasthttp.RequestCtx) {
 	if s.auth == nil {
 		writeJSON(ctx, fasthttp.StatusServiceUnavailable, map[string]string{"error": "auth not configured"})
@@ -1543,13 +1684,6 @@ func (s *Server) handleRemoveGroup(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "group not found: " + name})
 		return
 	}
-	if s.db != nil {
-		if err := s.db.DeleteGroup(name); err != nil {
-			s.logger.Error("failed to delete group from mysql", "name", name, "err", err)
-			writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": "failed to delete group from mysql"})
-			return
-		}
-	}
 	s.applyGroups()
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 }
@@ -1633,7 +1767,7 @@ func (s *Server) validateGroup(g config.GroupCfg) error {
 }
 
 // applyGroups pushes the current group list to the pool and gateway and
-// persists to the JSON file if configured.
+// persists to the file store if configured.
 func (s *Server) applyGroups() {
 	s.groupsMu.RLock()
 	snapshot := make([]config.GroupCfg, len(s.groups))
@@ -1645,11 +1779,8 @@ func (s *Server) applyGroups() {
 	}
 	if s.db != nil {
 		if err := s.db.ReplaceGroups(snapshot); err != nil {
-			s.logger.Error("failed to persist groups to mysql", "err", err)
+			s.logger.Error("failed to persist groups to file", "err", err)
 		}
-	}
-	if s.groupsFile != "" {
-		_ = s.persistGroups(snapshot)
 	}
 }
 
@@ -1660,45 +1791,6 @@ func (s *Server) GroupList() []config.GroupCfg {
 	out := make([]config.GroupCfg, len(s.groups))
 	copy(out, s.groups)
 	return out
-}
-
-// SetGroupsFile enables JSON persistence and loads existing file if present.
-// When groups were already loaded from MySQL they take precedence, so the file
-// is only used as a fallback source when no database is configured.
-func (s *Server) SetGroupsFile(path string) error {
-	s.groupsFile = path
-	s.groupsMu.RLock()
-	fromDB := s.groupsFromDB
-	s.groupsMu.RUnlock()
-	if fromDB {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	var groups []config.GroupCfg
-	if err := json.Unmarshal(data, &groups); err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		s.groupsMu.Lock()
-		s.groups = groups
-		s.groupsMu.Unlock()
-		s.pool.SetGroups(groups)
-	}
-	return nil
-}
-
-func (s *Server) persistGroups(groups []config.GroupCfg) error {
-	data, err := json.MarshalIndent(groups, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.groupsFile, data, 0o600)
 }
 
 // AttachGateway wires the proxy gateway so group CRUD refreshes its creds.

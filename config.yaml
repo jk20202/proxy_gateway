@@ -1,103 +1,63 @@
 server:
-  listen: ":8080"
+  listen: ":9999"                    # Web 管理控制台 + 消费/管理 API
   read_timeout_ms: 3000
   write_timeout_ms: 3000
   max_workers: 8192
-  gateway_listen: ":10000"        # HTTP 代理网关端口：可用 curl -x 用户名:密码@域名:10000 直接走分组代理
+  gateway_listen: ":1024"            # HTTP 代理网关：curl -x 用户名:密码@域名:1024
+
+# 持久化：账户/Provider/分组/系统设置以 JSON 文件形式存放在 data_dir 目录，
+# 单二进制即可运行，无需 MySQL/Redis。
+data_dir: "data"
 
 health_check:
-  interval_s: 60               # 每分钟检测一次所有代理
-  timeout_ms: 6000           # 免费代理延迟阈值 3s 内需测出真实延迟，故超时放宽到 6s
-  concurrency: 256           # 免费代理量级大，并发调高避免检测积压
-  check_url: "http://127.0.0.1:10002/"  # mock target（单 URL 兜底，通常不用）
-  # 5 个固定默认测试 URL（均为轻量 IP 检测服务，返回极少量数据，省代理流量）；
-  # 新增 Provider 时 Web 界面默认全部勾选，可取消勾选不使用；也可自定义新增测试 URL。
-  # 其中 ip-api.com 会返回代理出口 IP 的国家代码，检测存活的同时顺带刷新代理国家；
-  # 若检测网站不返回国家，则保留该代理上一轮已测出的国家。
+  interval_s: 60
+  timeout_ms: 6000
+  concurrency: 256
+  check_url: ""
   check_urls:
-    - { name: "ipapi-cc",   url: "http://ip-api.com/line/?fields=countryCode",           enabled: true }
-    - { name: "ipapi-json", url: "http://ip-api.com/json/?fields=countryCode,query",     enabled: true }
-    - { name: "ipify",      url: "https://api.ipify.org",                                enabled: true }
-    - { name: "ipsb",       url: "https://ip.sb",                                        enabled: true }
-    - { name: "icanhazip",  url: "https://icanhazip.com",                                enabled: true }
+    - { name: "ipapi-cc",   url: "http://ip-api.com/line/?fields=countryCode", enabled: true }
+    - { name: "ipapi-json", url: "http://ip-api.com/json/?fields=countryCode,query", enabled: true }
+    - { name: "ipify",      url: "https://api.ipify.org", enabled: true }
+    - { name: "ipsb",       url: "https://ip.sb", enabled: true }
+    - { name: "icanhazip",  url: "https://icanhazip.com", enabled: true }
   max_fails: 3
   rebuild_interval_ms: 200
 
 alerts:
-  # provider 失效/恢复、池耗尽、刷新失败时告警。以下为示例配置，按需启用。
-  dedup_seconds: 300          # 同一事件去重窗口，避免告警风暴
-  monitor_interval_s: 15      # provider 状态监控周期
-  recover_interval_s: 3600    # provider 掉线后每隔此秒数强制刷新尝试自动恢复；0=关闭
+  dedup_seconds: 300
+  monitor_interval_s: 15
+  recover_interval_s: 3600
 
-# 代理 IP 归属查询：入池后自动为每个代理标记国家/地区（用于分组的国内/海外/指定国家过滤）。
-# 通过 ip-api.com 免费批量接口查询；私有/内网 IP 会被跳过（保持未知）。
-# 中国内地=国内(CN)；其余全部=海外，含中国香港(HK)。
+# 代理 IP 归属查询（可选）。关闭可减少对外部接口的依赖。
 geo:
   enabled: true
-  # url: "http://ip-api.com/batch"   # 批量归属查询端点，可替换为自建服务
-  enrich_interval_s: 60               # 每隔多少秒扫描一次未标记国家的代理并回填
+  enrich_interval_s: 60
 
-# 账户：配置后 Web 与消费 API 均需鉴权（Web 用 name+password 登录，消费 API 用 token）。
-# 留空数组则鉴权关闭（不推荐生产使用）。
+# 账户：配置后 Web 与消费 API 均需鉴权。首个 admin 账户在此播种，
+# 后续账户请在 Web「账户管理」中增删；密码在首次登录后自动加盐哈希存储。
 accounts:
   - name: "admin"
     password: "admin123"
-    token: "replace-with-a-random-api-token"
-    role: "admin"            # admin 可管理全部；user 仅可调用消费 API
+    token: "change-me-to-a-random-token"
+    role: "admin"
     enabled: true
-    groups: []               # 该账户可用的调度分组，留空=全部
+    groups: []
 
-# SQLite 调用记录（每账户调用统计）。path 留空则关闭。
+# SQLite 调用记录（按账户统计）。path 留空则关闭。
 db:
   path: "usage.db"
   batch_size: 200
   flush_interval_ms: 1000
 
-# 调度分组：主池存活率跌破 min_alive_ratio 时自动切换备用池（依次尝试，首个可用即停）。
-# 组内 provider 全部为非隧道型（ip_pool/sticky/free）时用平滑加权轮询(SWRR)，含隧道型则加权随机。
-# username/password：网关凭证。配置后即可用 `curl -x 用户名:密码@域名:10000 <目标URL>` 直接经由本组代理转发请求，
-# 网关按凭证匹配分组并从该组实时取一个可用代理中转，组内主备池自动切换对客户端透明。
-groups:
-  # 免费代理分组：按"域名相关+free"命名，采集自公共免费源，延迟低于 3 秒的才收，
-  # 每分钟检测一次，实测延迟超过 3 秒或不可用即删；无可用时同样支持备用池兜底。
-  - name: "charlespikachu-free"
-    type: "free"
-    min_alive_ratio: 0
-    username: "free"              # 网关用户名
-    password: "free-pass"
-    primary: ["charlespikachu-free"]
-    # backups:
-    #   - name: "fallback-paid"
-    #     min_alive_ratio: 0
-    #     providers: ["mock-tunnel"]
+# 系统设置（可在 Web「系统设置」页实时修改并持久化）。
+settings:
+  site_name: "Proxy Pool"
+  registration_enabled: false
+  theme_default: "dark"
 
-providers:
-  # 免费代理源：采集自公共免费源，只保留上报延迟低于 max_speed_ms 的 HTTP 代理。
-  # 免费代理不可用即删（健康检测一次失败，或实测延迟超过 delete_latency_ms），不告警。
-  # 不设上限、不过期：只要代理还能用、延迟达标就一直保留，按检测频率自动淘汰超标者。
-  - name: "charlespikachu-free"
-    type: "free"
-    enabled: true
-    min_alive_ratio: 0
-    check_interval_s: 60          # 检测频率：池内代理每 60s 检测一次延迟
-    check_url: "http://www.gstatic.com/generate_204"   # 免费代理的真实连通性检测目标（204 轻量探测）
-    free:
-      feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
-      refresh_interval_s: 600               # 采集频率：每 10 分钟重新采集一次
-      max_speed_ms: 3000                    # 只收上报延迟低于 3 秒的（页面上自己的测速）
-      delete_latency_ms: 3000               # 每次检测实测延迟超过 3 秒的直接删除
+# 调度分组：主池存活率跌破 min_alive_ratio 时自动切换备用池，恢复自动切回。
+# 初始为空，请在 Web「调度分组」中创建。
+groups: []
 
-# 持久化存储：MySQL 存低频设置（账户/分组/provider 配置），Redis 缓存高频代理状态（延迟/国家/存活）。
-# 两者均可选；不配置则退回原行为（账户仅内存、分组持久化到 groups.json）。
-storage:
-  mysql:
-    # addr 与 user/pass/db 组合成 DSN；也可直接用 dsn 指定
-    addr: "127.0.0.1:3306"
-    user: "proxy"
-    pass: "proxy_pass"
-    db: "proxy_pool"
-    # dsn: "proxy:proxy_pass@tcp(127.0.0.1:3306)/proxy_pool"
-  redis:
-    addr: "127.0.0.1:6379"
-    # password: ""
-    # db: 0
+# 代理平台：初始为空，请在 Web「代理平台」中添加（tunnel/ip_pool/sticky/free）。
+providers: []

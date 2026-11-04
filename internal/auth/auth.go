@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"strings"
@@ -16,6 +17,45 @@ func NewToken() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// hashPassword returns the salted hash of a plaintext password in the form
+// "<saltHex>$<sha256Hex>". Salt + SHA-256 keeps the service dependency-free
+// while avoiding plaintext credential storage at rest.
+func hashPassword(password string) string {
+	salt := make([]byte, 16)
+	_, _ = rand.Read(salt)
+	h := sha256.Sum256(append(salt, []byte(password)...))
+	return hex.EncodeToString(salt) + "$" + hex.EncodeToString(h[:])
+}
+
+// isHashed reports whether a stored password is already in "salt$hash" form.
+func isHashed(stored string) bool {
+	return strings.Index(stored, "$") > 0
+}
+
+// verifyPassword checks a plaintext password against a stored value. Stored
+// values may be hashed ("salt$hash") or legacy plaintext (e.g. seeded from an
+// old config.yaml); plaintext entries verify directly and are migrated to a
+// hash by the caller.
+func verifyPassword(stored, password string) bool {
+	if stored == "" {
+		return false
+	}
+	if isHashed(stored) {
+		i := strings.Index(stored, "$")
+		salt, err := hex.DecodeString(stored[:i])
+		if err != nil {
+			return false
+		}
+		want, err := hex.DecodeString(stored[i+1:])
+		if err != nil {
+			return false
+		}
+		h := sha256.Sum256(append(salt, []byte(password)...))
+		return subtle.ConstantTimeCompare(h[:], want) == 1
+	}
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(password)) == 1
 }
 
 // Account is a runtime view of an internal user.
@@ -52,19 +92,19 @@ type Manager struct {
 	mu      sync.RWMutex
 	byName  map[string]*Account
 	byToken map[string]*Account
-	persist *persist.MySQL
+	persist *persist.File
 }
 
-// AttachMySQL wires optional MySQL persistence so account mutations survive
+// AttachStore wires optional file persistence so account mutations survive
 // restarts. Pass nil to keep accounts in-memory only.
-func (m *Manager) AttachMySQL(p *persist.MySQL) {
+func (m *Manager) AttachStore(p *persist.File) {
 	m.mu.Lock()
 	m.persist = p
 	m.mu.Unlock()
 }
 
-// SyncAll seeds MySQL with the current account set. Called once at startup so
-// config.yaml accounts appear in the database even when the table was empty.
+// SyncAll seeds the persistent store with the current account set. Called once
+// at startup so config.yaml accounts appear in the file even when it was empty.
 func (m *Manager) SyncAll() error {
 	m.mu.RLock()
 	accts := make([]config.AccountCfg, 0, len(m.byName))
@@ -116,16 +156,29 @@ func (m *Manager) Empty() bool {
 }
 
 // Login authenticates by name+password and returns the account's API token.
+// A successful login against a legacy plaintext password transparently migrates
+// it to a salted hash so the credential is not stored in the clear.
 func (m *Manager) Login(name, password string) (*Account, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
 	acct := m.byName[name]
 	if acct == nil || !acct.Enabled {
+		m.mu.Unlock()
 		return nil, false
 	}
-	if subtle.ConstantTimeCompare([]byte(acct.Password), []byte(password)) != 1 {
+	if !verifyPassword(acct.Password, password) {
+		m.mu.Unlock()
 		return nil, false
 	}
+	if !isHashed(acct.Password) {
+		acct.Password = hashPassword(password)
+		if m.persist != nil {
+			_ = m.persist.SaveAccount(config.AccountCfg{
+				Name: acct.Name, Password: acct.Password, Token: acct.Token,
+				Role: acct.Role, Enabled: acct.Enabled, Groups: acct.Groups,
+			})
+		}
+	}
+	m.mu.Unlock()
 	return acct, true
 }
 
@@ -154,7 +207,8 @@ func (m *Manager) List() []config.AccountCfg {
 }
 
 // AddAccount inserts or replaces an account dynamically. When the token is
-// empty a random one is generated so callers never control the token.
+// empty a random one is generated so callers never control the token. A
+// non-empty plaintext password is hashed before storage.
 func (m *Manager) AddAccount(c config.AccountCfg) error {
 	if strings.TrimSpace(c.Name) == "" {
 		return &ConfigError{"name is required"}
@@ -164,6 +218,9 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 	}
 	if c.Role != "admin" && c.Role != "user" {
 		return &ConfigError{"role must be admin or user"}
+	}
+	if c.Password != "" && !isHashed(c.Password) {
+		c.Password = hashPassword(c.Password)
 	}
 	if strings.TrimSpace(c.Token) == "" {
 		c.Token = NewToken()
@@ -192,9 +249,9 @@ func (m *Manager) AddAccount(c config.AccountCfg) error {
 
 // UpdateAccount applies a partial update to an existing account. The token is
 // regenerated automatically when an empty token is provided. Password is kept
-// unchanged when empty, and Groups is kept unchanged when nil (empty slice
-// clears the group restriction). When c.Name differs from name the account is
-// renamed, so callers can edit the account name in-place.
+// unchanged when empty (and hashed when provided), and Groups is kept unchanged
+// when nil (empty slice clears the group restriction). When c.Name differs from
+// name the account is renamed, so callers can edit the account name in-place.
 func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -210,6 +267,9 @@ func (m *Manager) UpdateAccount(name string, c config.AccountCfg) error {
 	}
 	if c.Password != "" {
 		acct.Password = c.Password
+		if !isHashed(c.Password) {
+			acct.Password = hashPassword(c.Password)
+		}
 	}
 	if c.Groups != nil {
 		acct.Groups = c.Groups

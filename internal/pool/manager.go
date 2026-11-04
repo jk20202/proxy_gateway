@@ -29,8 +29,7 @@ type Manager struct {
 	provs   map[string]*managedProvider
 	cfg     *config.Config
 	logger  *slog.Logger
-	persist *persist.MySQL
-	redis   *persist.Redis
+	persist *persist.File
 
 	geo *geo.Client // nil 时不做 IP 归属查询（geo 未启用）
 
@@ -79,17 +78,18 @@ func (m *Manager) SetGeo(g *geo.Client) {
 	m.geo = g
 }
 
-// AttachMySQL wires optional MySQL persistence for provider configs so runtime
+// AttachStore wires optional file persistence for provider configs so runtime
 // edits survive restarts.
-func (m *Manager) AttachMySQL(p *persist.MySQL) {
+func (m *Manager) AttachStore(p *persist.File) {
 	m.mu.Lock()
 	m.persist = p
 	m.mu.Unlock()
 }
 
-// SyncProvidersToDB seeds MySQL with the current provider configs. Called once
-// at startup so config.yaml providers appear even when the table was empty.
-func (m *Manager) SyncProvidersToDB() error {
+// SyncProvidersToStore seeds the persistent store with the current provider
+// configs. Called once at startup so config.yaml providers appear even when the
+// file was empty.
+func (m *Manager) SyncProvidersToStore() error {
 	m.mu.RLock()
 	ps := make([]config.ProviderCfg, 0, len(m.provs))
 	for _, mp := range m.provs {
@@ -101,54 +101,6 @@ func (m *Manager) SyncProvidersToDB() error {
 		return nil
 	}
 	return pers.ReplaceProviders(ps)
-}
-
-// AttachRedis wires optional Redis caching of proxy runtime state.
-func (m *Manager) AttachRedis(r *persist.Redis) {
-	m.mu.Lock()
-	m.redis = r
-	m.mu.Unlock()
-}
-
-// RestoreFromRedis replays cached latency / country values onto the proxies in
-// the pool. Called once after the initial load so restart preserves the last
-// observed health data; the health checker re-verifies alive soon after.
-func (m *Manager) RestoreFromRedis() {
-	m.mu.RLock()
-	r := m.redis
-	m.mu.RUnlock()
-	if r == nil {
-		return
-	}
-	byProvider := map[string][]*model.Proxy{}
-	for _, pr := range m.pool.All() {
-		byProvider[pr.Provider] = append(byProvider[pr.Provider], pr)
-	}
-	for prov, proxies := range byProvider {
-		states, err := r.LoadProxyStates(prov)
-		if err != nil {
-			m.logger.Debug("redis restore failed", "provider", prov, "err", err)
-			continue
-		}
-		restored := 0
-		for _, pr := range proxies {
-			st, ok := states[pr.ID]
-			if !ok {
-				continue
-			}
-			if st.LatencyMS > 0 {
-				pr.LatencyMS.Store(st.LatencyMS)
-			}
-			if st.Country != "" {
-				pr.Country = st.Country
-			}
-			restored++
-		}
-		if restored > 0 {
-			m.logger.Info("restored proxy state from redis", "provider", prov, "proxies", restored)
-		}
-	}
-	m.pool.Rebuild()
 }
 
 // addProxies pushes proxies into the pool. When the provider config carries an

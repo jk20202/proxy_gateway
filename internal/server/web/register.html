@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>注册</title>
+<style>
+:root {
+  --bg: #080c18;
+  --panel: rgba(20, 27, 48, .72);
+  --border: rgba(148, 163, 184, .16);
+  --text: #e6e9f4;
+  --muted: #8b93a7;
+  --accent: #6366f1;
+  --accent2: #8b5cf6;
+  --accent3: #22d3ee;
+  --red: #ef4444;
+  --green: #22c55e;
+  --input-bg: rgba(8, 12, 24, .55);
+  --shadow: 0 24px 60px rgba(0, 0, 0, .45);
+}
+html[data-theme="light"] {
+  --bg: #eef1f8;
+  --panel: rgba(255, 255, 255, .85);
+  --border: rgba(15, 23, 42, .12);
+  --text: #1c2333;
+  --muted: #6b7280;
+  --input-bg: rgba(255, 255, 255, .8);
+  --shadow: 0 24px 60px rgba(31, 45, 80, .16);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px; display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden; transition: background .35s ease, color .35s ease;
+}
+.bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.bg .blob { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5; }
+.bg .b1 { width: 460px; height: 460px; left: -120px; top: -120px; background: var(--accent); animation: drift 18s ease-in-out infinite alternate; }
+.bg .b2 { width: 420px; height: 420px; right: -100px; bottom: -120px; background: var(--accent2); animation: drift 22s ease-in-out infinite alternate-reverse; }
+.bg .b3 { width: 320px; height: 320px; right: 30%; top: 10%; background: var(--accent3); opacity: .28; animation: drift 26s ease-in-out infinite alternate; }
+@keyframes drift { from { transform: translate(0,0) scale(1); } to { transform: translate(40px, 30px) scale(1.15); } }
+html[data-theme="light"] .bg .blob { opacity: .28; }
+
+.login-wrap { position: relative; z-index: 1; width: 400px; max-width: 92vw; }
+.login-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 20px;
+  padding: 38px 36px 32px; box-shadow: var(--shadow);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  animation: pop .5s cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes pop { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+.brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.brand .logo {
+  width: 44px; height: 44px; border-radius: 13px; flex: none;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 8px 22px rgba(99, 102, 241, .35);
+}
+.brand .logo svg { width: 24px; height: 24px; }
+.brand h1 { font-size: 20px; font-weight: 700; }
+.brand .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.brand .meta { display: flex; flex-direction: column; }
+
+.tabs { display: flex; gap: 22px; margin: 22px 0 6px; border-bottom: 1px solid var(--border); }
+.tabs a {
+  padding: 8px 2px 12px; font-size: 14px; color: var(--muted);
+  text-decoration: none; border-bottom: 2px solid transparent; transition: .2s;
+}
+.tabs a.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+.form-row { margin-bottom: 16px; }
+.form-row label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
+.form-row input {
+  width: 100%; background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 11px; color: var(--text); font-size: 14px; padding: 12px 14px; outline: none;
+  transition: border-color .18s, box-shadow .18s;
+}
+.form-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99, 102, 241, .18); }
+.form-row input::placeholder { color: var(--muted); opacity: .65; }
+.form-row .pw-hint { color: var(--muted); font-size: 11px; margin-top: 5px; }
+.err {
+  background: rgba(239, 68, 68, .12); border: 1px solid var(--red); color: var(--red);
+  border-radius: 10px; padding: 10px 13px; font-size: 13px; margin-top: 14px; display: none;
+}
+.err.show { display: block; animation: pop .25s ease; }
+.ok-msg {
+  background: rgba(34, 197, 94, .12); border: 1px solid var(--green); color: var(--green);
+  border-radius: 10px; padding: 10px 13px; font-size: 13px; margin-top: 14px; display: none;
+}
+.ok-msg.show { display: block; animation: pop .25s ease; }
+.btn {
+  width: 100%; margin-top: 4px; padding: 13px; border: none; border-radius: 11px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
+  box-shadow: 0 10px 26px rgba(99, 102, 241, .32);
+}
+.btn:hover { filter: brightness(1.06); box-shadow: 0 14px 30px rgba(99, 102, 241, .42); }
+.btn:active { transform: scale(.985); }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.hint { color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px; }
+.hint a { color: var(--accent); text-decoration: none; }
+
+.theme-fab {
+  position: fixed; top: 22px; right: 22px; z-index: 2;
+  width: 40px; height: 40px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(12px); transition: transform .18s, border-color .18s;
+}
+.theme-fab:hover { transform: rotate(18deg) scale(1.06); border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+<button class="theme-fab" id="theme-fab" title="切换主题" aria-label="切换主题"></button>
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+        </svg>
+      </div>
+      <div class="meta">
+        <h1 id="site-name">Proxy Pool</h1>
+        <span class="sub">创建你的代理池账户</span>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <a href="/login">登录</a>
+      <a href="/register" class="active">注册</a>
+    </div>
+
+    <div class="form-row">
+      <label for="reg-name">账户名</label>
+      <input id="reg-name" autocomplete="username" placeholder="至少 3 个字符">
+    </div>
+    <div class="form-row">
+      <label for="reg-pass">密码</label>
+      <input id="reg-pass" type="password" autocomplete="new-password" placeholder="至少 6 个字符">
+    </div>
+    <div class="form-row">
+      <label for="reg-pass2">确认密码</label>
+      <input id="reg-pass2" type="password" autocomplete="new-password" placeholder="再次输入密码">
+    </div>
+    <button id="reg-btn" class="btn magnetic">注 册</button>
+    <div id="reg-error" class="err"></div>
+    <div id="reg-ok" class="ok-msg"></div>
+    <div class="hint">注册即创建普通用户账户，已有账户？<a href="/login">去登录</a></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let site = { site_name: 'Proxy Pool', registration_enabled: false, theme_default: 'dark' };
+
+function showError(msg) {
+  const el = document.getElementById('reg-error');
+  el.textContent = msg; el.classList.add('show');
+}
+function showOk(msg) {
+  const el = document.getElementById('reg-ok');
+  el.textContent = msg; el.classList.add('show');
+}
+
+async function loadSite() {
+  try {
+    const r = await fetch(API + '/api/v1/site');
+    if (r.ok) site = await r.json();
+  } catch (e) {}
+  document.getElementById('site-name').textContent = site.site_name || 'Proxy Pool';
+  document.title = (site.site_name || 'Proxy Pool') + ' · 注册';
+  if (!site.registration_enabled) {
+    document.getElementById('reg-btn').disabled = true;
+    showError('当前已关闭开放注册，请联系管理员创建账户。');
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('pp_theme', theme);
+  const fab = document.getElementById('theme-fab');
+  const dark = theme !== 'light';
+  fab.innerHTML = dark
+    ? '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+    : '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+}
+
+async function doRegister() {
+  const name = document.getElementById('reg-name').value.trim();
+  const password = document.getElementById('reg-pass').value;
+  const password2 = document.getElementById('reg-pass2').value;
+  const btn = document.getElementById('reg-btn');
+  const errEl = document.getElementById('reg-error');
+  errEl.classList.remove('show');
+  document.getElementById('reg-ok').classList.remove('show');
+  if (name.length < 3) { showError('账户名至少 3 个字符'); return; }
+  if (password.length < 6) { showError('密码至少 6 个字符'); return; }
+  if (password !== password2) { showError('两次输入的密码不一致'); return; }
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/v1/auth/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showError(data.error || ('注册失败 (HTTP ' + res.status + ')')); return; }
+    if (data.token) {
+      localStorage.setItem('pp_token', data.token);
+      showOk('注册成功，正在进入控制台...');
+      setTimeout(() => location.href = '/', 700);
+    } else {
+      showOk('注册成功，请前往登录');
+      setTimeout(() => location.href = '/login', 900);
+    }
+  } catch (e) { showError('网络错误，请重试'); }
+  finally { btn.disabled = false; }
+}
+
+document.getElementById('reg-btn').addEventListener('click', doRegister);
+document.getElementById('reg-pass2').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
+document.getElementById('theme-fab').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  applyTheme(cur);
+});
+
+(async () => {
+  await loadSite();
+  applyTheme(localStorage.getItem('pp_theme') || site.theme_default || 'dark');
+})();
+</script>
+</body>
+</html>

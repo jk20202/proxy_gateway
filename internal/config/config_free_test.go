@@ -1,14 +1,54 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// freeConfigFixture is a minimal YAML that exercises free-provider + free-group
+// parsing independently of the deployment config.yaml.
+const freeConfigFixture = `
+health_check:
+  interval_s: 60
+  timeout_ms: 6000
+  concurrency: 256
+  check_urls:
+    - { name: "ipapi-cc", url: "http://ip-api.com/line/?fields=countryCode", enabled: true }
+    - { name: "ipapi-json", url: "http://ip-api.com/json/?fields=countryCode,query", enabled: true }
+    - { name: "ipify", url: "https://api.ipify.org", enabled: true }
+    - { name: "ipsb", url: "https://ip.sb", enabled: true }
+    - { name: "icanhazip", url: "https://icanhazip.com", enabled: true }
+providers:
+  - name: "charlespikachu-free"
+    type: "free"
+    enabled: true
+    min_alive_ratio: 0
+    check_url: "http://www.gstatic.com/generate_204"
+    free:
+      feed_url: "https://charlespikachu.github.io/freeproxy/proxies.json"
+      refresh_interval_s: 600
+      max_speed_ms: 3000
+      delete_latency_ms: 3000
+groups:
+  - name: "charlespikachu-free"
+    type: "free"
+    min_alive_ratio: 0
+    primary: ["charlespikachu-free"]
+`
 
 func TestLoadFreeConfig(t *testing.T) {
-	cfg, err := Load("../../config.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(freeConfigFixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(cfg.HealthCheck.CheckURLs) != 5 {
-		t.Fatalf("config.yaml should define 5 default check_urls, got %d", len(cfg.HealthCheck.CheckURLs))
+		t.Fatalf("fixture should define 5 default check_urls, got %d", len(cfg.HealthCheck.CheckURLs))
 	}
 	if urls := cfg.HealthCheck.EnabledCheckURLs(); len(urls) != 5 {
 		t.Fatalf("all 5 default check_urls should be enabled, got %d: %v", len(urls), urls)
@@ -31,8 +71,7 @@ func TestLoadFreeConfig(t *testing.T) {
 	if !found {
 		t.Fatal("charlespikachu-free provider not found")
 	}
-	_, ok := cfg.Group("charlespikachu-free")
-	if !ok {
+	if _, ok := cfg.Group("charlespikachu-free"); !ok {
 		t.Fatal("charlespikachu-free group not found")
 	}
 }

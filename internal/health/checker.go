@@ -20,9 +20,10 @@ import (
 )
 
 type Checker struct {
-	cfg     config.HealthConfig
-	pool    *pool.Pool
-	logger  *slog.Logger
+	cfgMu  sync.RWMutex
+	cfg    config.HealthConfig
+	pool   *pool.Pool
+	logger *slog.Logger
 	timeout time.Duration
 
 	lastCheckMu sync.Mutex
@@ -37,6 +38,32 @@ func NewChecker(cfg config.HealthConfig, p *pool.Pool, logger *slog.Logger) *Che
 		timeout:   time.Duration(cfg.TimeoutMs) * time.Millisecond,
 		lastCheck: make(map[string]time.Time),
 	}
+}
+
+// SetConfig hot-applies a new health-check configuration (interval, timeout,
+// concurrency, check URLs). The Run loop re-reads the interval every tick so
+// interval changes take effect without a restart.
+func (c *Checker) SetConfig(cfg config.HealthConfig) {
+	c.cfgMu.Lock()
+	c.cfg = cfg
+	if cfg.TimeoutMs > 0 {
+		c.timeout = time.Duration(cfg.TimeoutMs) * time.Millisecond
+	}
+	c.cfgMu.Unlock()
+}
+
+// getCfg returns a snapshot of the current health configuration.
+func (c *Checker) getCfg() config.HealthConfig {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.cfg
+}
+
+// getTimeout returns the current probe timeout.
+func (c *Checker) getTimeout() time.Duration {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.timeout
 }
 
 func (c *Checker) Run(ctx context.Context) {
@@ -62,7 +89,7 @@ func (c *Checker) Run(ctx context.Context) {
 // proxies, honoring per-provider check_interval_s. Falls back to the global
 // health_check.interval_s when no proxy sets a custom interval.
 func (c *Checker) minInterval() time.Duration {
-	min := int64(c.cfg.IntervalSeconds) * 1000
+	min := int64(c.getCfg().IntervalSeconds) * 1000
 	if min <= 0 {
 		min = 60_000
 	}
@@ -90,12 +117,13 @@ func (c *Checker) checkDue(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	cfg := c.getCfg()
 	due := make([]*model.Proxy, 0, len(proxies))
 	c.lastCheckMu.Lock()
 	for _, pr := range proxies {
 		interval := pr.CheckIntervalMS
 		if interval <= 0 {
-			interval = int64(c.cfg.IntervalSeconds) * 1000
+			interval = int64(cfg.IntervalSeconds) * 1000
 		}
 		if interval <= 0 {
 			interval = 60_000
@@ -108,7 +136,7 @@ func (c *Checker) checkDue(ctx context.Context) {
 	}
 	c.lastCheckMu.Unlock()
 
-	sem := make(chan struct{}, c.cfg.Concurrency)
+	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
 	for _, pr := range due {
 		pr := pr
@@ -135,7 +163,7 @@ func (c *Checker) checkAll(ctx context.Context) {
 	}
 	c.lastCheckMu.Unlock()
 
-	sem := make(chan struct{}, c.cfg.Concurrency)
+	sem := make(chan struct{}, c.getCfg().Concurrency)
 	var wg sync.WaitGroup
 	for _, pr := range proxies {
 		pr := pr
@@ -189,7 +217,7 @@ func (c *Checker) checkOne(ctx context.Context, pr *model.Proxy) {
 // target URLs (with their enabled state), used by the admin API to render the
 // provider test-URL editor in the web console.
 func (c *Checker) DefaultCheckURLs() []config.CheckURLItem {
-	return c.cfg.CheckURLs
+	return c.getCfg().CheckURLs
 }
 
 // resolveCheckURLs computes the effective health-check URL list for a proxy:
@@ -202,11 +230,12 @@ func (c *Checker) resolveCheckURLs(pr *model.Proxy) []string {
 	if pr.CheckURL != "" {
 		return []string{pr.CheckURL}
 	}
-	if urls := c.cfg.EnabledCheckURLs(); len(urls) > 0 {
+	cfg := c.getCfg()
+	if urls := cfg.EnabledCheckURLs(); len(urls) > 0 {
 		return urls
 	}
-	if c.cfg.CheckURL != "" {
-		return []string{c.cfg.CheckURL}
+	if cfg.CheckURL != "" {
+		return []string{cfg.CheckURL}
 	}
 	return nil
 }
@@ -229,7 +258,8 @@ func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string
 	if len(checkURLs) == 0 {
 		return false, ""
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	timeout := c.getTimeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	proxyURL := &url.URL{
@@ -243,20 +273,20 @@ func (c *Checker) probe(ctx context.Context, pr *model.Proxy, checkURLs []string
 	transport := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 		DialContext: (&net.Dialer{
-			Timeout: c.timeout,
+			Timeout: timeout,
 		}).DialContext,
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   c.timeout,
-		ResponseHeaderTimeout: c.timeout,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 	}
 	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   c.timeout,
+		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

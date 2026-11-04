@@ -1,0 +1,14 @@
+[Unit]
+Description=Proxy Pool Gateway (multi-provider proxy pool)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxy-pool
+ExecStart=/opt/proxy-pool/proxy-pool -config /opt/proxy-pool/config.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

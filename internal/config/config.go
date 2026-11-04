@@ -17,31 +17,20 @@ type Config struct {
 	DB          DBConfig      `yaml:"db" json:"db"`
 	Alerts      AlertConfig   `yaml:"alerts" json:"alerts"`
 	Geo         GeoConfig     `yaml:"geo" json:"geo"`
-	Storage     StorageConfig `yaml:"storage" json:"storage"`
+	Settings    Settings      `yaml:"settings" json:"settings"`
+	// DataDir is the directory where JSON files (accounts / providers / groups /
+	// settings) are persisted. Empty disables file persistence (in-memory only).
+	DataDir string `yaml:"data_dir" json:"data_dir"`
 }
 
-// StorageConfig configures persistent storage: MySQL for low-frequency settings
-// (accounts / groups / provider configs) and Redis for high-frequency proxy
-// runtime state (latency / country / alive). Both are optional; when disabled
-// the process falls back to in-memory state (accounts/groups persisted to JSON
-// files as before).
-type StorageConfig struct {
-	MySQL MySQLConfig `yaml:"mysql" json:"mysql"`
-	Redis RedisConfig `yaml:"redis" json:"redis"`
-}
-
-type MySQLConfig struct {
-	DSN  string `yaml:"dsn" json:"dsn"` // e.g. proxy:proxy_pass@tcp(127.0.0.1:3306)/proxy_pool
-	Addr string `yaml:"addr" json:"addr"`
-	User string `yaml:"user" json:"user"`
-	Pass string `yaml:"pass" json:"pass"`
-	DB   string `yaml:"db" json:"db"`
-}
-
-type RedisConfig struct {
-	Addr     string `yaml:"addr" json:"addr"`
-	Password string `yaml:"password" json:"password"`
-	DB       int    `yaml:"db" json:"db"`
+// Settings holds runtime-adjustable system settings that administrators can
+// edit from the web console. It is persisted to settings.json and applied live
+// where the backend supports it (health-check tuning is hot-applied).
+type Settings struct {
+	SiteName            string       `yaml:"site_name" json:"site_name"`
+	RegistrationEnabled bool         `yaml:"registration_enabled" json:"registration_enabled"`
+	ThemeDefault        string       `yaml:"theme_default" json:"theme_default"` // dark / light
+	HealthCheck         HealthConfig `yaml:"health_check" json:"health_check"`
 }
 
 // GeoConfig configures IP geolocation used to tag each proxy with its country.
@@ -177,16 +166,16 @@ func EnabledCheckURLs(items []CheckURLItem) []string {
 }
 
 type HealthConfig struct {
-	IntervalSeconds int    `yaml:"interval_s"`
-	TimeoutMs       int    `yaml:"timeout_ms"`
-	Concurrency     int    `yaml:"concurrency"`
-	CheckURL        string `yaml:"check_url"`
+	IntervalSeconds   int            `yaml:"interval_s" json:"interval_s"`
+	TimeoutMs         int            `yaml:"timeout_ms" json:"timeout_ms"`
+	Concurrency       int            `yaml:"concurrency" json:"concurrency"`
+	CheckURL          string         `yaml:"check_url" json:"check_url"`
 	// CheckURLs is the list of default health-check target URLs. When a
 	// provider does not configure its own check URLs, the enabled defaults are
 	// used. All defaults are enabled unless marked otherwise.
-	CheckURLs         []CheckURLItem `yaml:"check_urls"`
-	MaxFails          int            `yaml:"max_fails"`
-	RebuildIntervalMs int            `yaml:"rebuild_interval_ms"`
+	CheckURLs         []CheckURLItem `yaml:"check_urls" json:"check_urls"`
+	MaxFails          int            `yaml:"max_fails" json:"max_fails"`
+	RebuildIntervalMs int            `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
 }
 
 type ProviderCfg struct {
@@ -334,6 +323,23 @@ func applyDefaults(cfg *Config) {
 	if cfg.Geo.URL == "" {
 		cfg.Geo.URL = "http://ip-api.com/batch"
 	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = "data"
+	}
+	if cfg.Settings.SiteName == "" {
+		cfg.Settings.SiteName = "Proxy Pool"
+	}
+	if cfg.Settings.ThemeDefault == "" {
+		cfg.Settings.ThemeDefault = "dark"
+	}
+	if cfg.Settings.ThemeDefault != "dark" && cfg.Settings.ThemeDefault != "light" {
+		cfg.Settings.ThemeDefault = "dark"
+	}
+	// The runtime-editable health settings default to the global health_check
+	// block so the web console always has a starting point to display.
+	if cfg.Settings.HealthCheck.IntervalSeconds == 0 {
+		cfg.Settings.HealthCheck = cfg.HealthCheck
+	}
 }
 
 // defaultCheckURLs returns the 5 built-in default health-check targets used
@@ -413,9 +419,8 @@ func (c *Config) Group(name string) (GroupCfg, bool) {
 }
 
 func (c *Config) Validate() error {
-	if len(c.Providers) == 0 {
-		return fmt.Errorf("at least one provider is required")
-	}
+	// A fresh install starts with zero providers; they are added from the web
+	// console afterwards, so an empty provider list is allowed.
 	for i, it := range c.HealthCheck.CheckURLs {
 		if strings.TrimSpace(it.URL) == "" {
 			return fmt.Errorf("health_check.check_urls[%d]: url is required", i)
