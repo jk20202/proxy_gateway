@@ -723,7 +723,10 @@ func (p *Pool) MarkFailed(id string, latencyMS int64) {
 		if latencyMS > 0 {
 			pr.LatencyMS.Store(latencyMS)
 		}
-		if f >= 3 {
+		// A proxy that has never succeeded (LastUsed==0) is marked dead on the
+		// first failure so a freshly-added dead proxy is detected immediately.
+		// Established proxies (LastUsed>0) keep the 3-failure flap protection.
+		if f >= 3 || pr.LastUsed.Load() == 0 {
 			pr.Alive.Store(false)
 			p.Rebuild()
 		}

@@ -857,7 +857,19 @@ func (s *Server) handleAddProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.triggerHealthCheck()
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
+}
+
+// triggerHealthCheck kicks off an immediate health-check pass so newly added
+// proxies are verified right away instead of waiting for the next periodic
+// tick (which could be up to health_check.interval_s away). Best-effort and
+// non-blocking.
+func (s *Server) triggerHealthCheck() {
+	if s.checker == nil {
+		return
+	}
+	go s.checker.CheckOnce(context.Background())
 }
 
 // requireOwnedProvider resolves a provider by name and verifies the requesting
@@ -941,6 +953,7 @@ func (s *Server) handleUpdateProvider(ctx *fasthttp.RequestCtx) {
 		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.triggerHealthCheck()
 	writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -1009,6 +1022,7 @@ func (s *Server) handleProviderAction(ctx *fasthttp.RequestCtx, method, path str
 			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 			return true
 		}
+		s.triggerHealthCheck()
 		writeJSON(ctx, fasthttp.StatusOK, map[string]bool{"ok": true})
 		return true
 	case "priority":

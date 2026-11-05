@@ -1147,7 +1147,7 @@ function renderDashboardProviders() {
       <td>${p.enabled ? '<span class="badge on">启用</span>' : '<span class="badge off">停用</span>'}</td>
       <td class="mono"><b style="color:var(--green)">${p.alive}</b> / ${p.total}</td>
       <td><span class="badge neutral">${esc(providerRegionLabel(p.countries))}</span></td>
-      <td>${p.last_err ? '<span class="badge off">异常</span>' : '<span class="badge on">正常</span>'}</td>
+      <td>${providerStatusBadge(p)}</td>
     </tr>`).join('');
 }
 function renderDashboardGroups() {
@@ -1168,6 +1168,20 @@ function providerRegionLabel(countries) {
   const hasOther = entries.some(([k,n]) => k !== 'CN' && n > 0);
   if (hasCN && hasOther) return '国内+海外';
   return hasCN ? '国内' : '海外';
+}
+// Provider 健康状态：基于「存活/总数」判定，而非 last_err（last_err 只反映
+// 提取源刷新失败，隧道/静态代理从不刷新，永远为空）。
+function providerStatusBadge(p) {
+  if (!p.total) return '<span class="badge neutral">无代理</span>';
+  if (!p.alive) return '<span class="badge off">全部失效</span>';
+  if (p.alive < p.total) return '<span class="badge kind">部分可用</span>';
+  return '<span class="badge on">正常</span>';
+}
+function providerStatusOrder(p) {
+  if (!p.total) return 0;
+  if (!p.alive) return 1;
+  if (p.alive < p.total) return 2;
+  return 3;
 }
 function renderProviders() {
   const tb = document.getElementById('provider-tbody');
@@ -1191,7 +1205,7 @@ function renderProviders() {
       if (key === 'type') return p.type || '';
       if (key === 'alive') return p.alive;
       if (key === 'region') return providerRegionLabel(p.countries);
-      if (key === 'status') return p.enabled ? 1 : 0;
+      if (key === 'status') return providerStatusOrder(p);
     });
   } else {
     list = list.slice().sort((a,b) => {
@@ -1222,7 +1236,7 @@ function renderProviders() {
       <td>${p.check_interval_s > 0 ? `<span>${p.check_interval_s}s</span>` : '<span class="refresh-hint">全局</span>'}</td>
       <td class="mono"><b style="color:var(--green)">${p.alive}</b> / ${p.total}</td>
       <td><span class="badge neutral">${esc(providerRegionLabel(p.countries))}</span></td>
-      <td>${p.last_err ? '<span class="badge off">异常</span>' : '<span class="badge on">正常</span>'}</td>
+      <td>${providerStatusBadge(p)}</td>
       <td>${ops}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="9" class="empty">无匹配结果</td></tr>';

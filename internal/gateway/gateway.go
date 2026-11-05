@@ -311,7 +311,11 @@ func (g *Gateway) relayHTTP(w http.ResponseWriter, r *http.Request, group string
 		out.Header.Set("Proxy-Authorization", basicAuth(pr.Username, pr.Password))
 	}
 
-	if err := out.Write(upstream); err != nil {
+	// WriteProxy writes the request in absolute-URI form (e.g.
+	// "GET http://host/path HTTP/1.1"), which forward-proxy upstreams expect.
+	// plain Write would emit origin-form ("GET /path") and cause some tunnel
+	// providers to reject the request with 403.
+	if err := out.WriteProxy(upstream); err != nil {
 		g.logger.Warn("gateway forward failed", "group", group, "proxy", pr.ID, "err", err)
 		return false, true
 	}
@@ -469,7 +473,7 @@ func (g *Gateway) ForwardPlain(target *url.URL, group string) (int, http.Header,
 	if pr.Username != "" {
 		out.Header.Set("Proxy-Authorization", basicAuth(pr.Username, pr.Password))
 	}
-	if err := out.Write(upstream); err != nil {
+	if err := out.WriteProxy(upstream); err != nil {
 		return 0, nil, nil, err
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upstream), out)
