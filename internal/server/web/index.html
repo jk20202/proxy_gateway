@@ -172,6 +172,34 @@ th.sorted { color: var(--accent); }
   padding: 8px 12px; border-radius: 10px; font-size: 13px; outline: none; cursor: pointer;
 }
 .toolbar .filter-select:focus { border-color: var(--accent); }
+/* 磁悬浮副菜单（过滤框） */
+.fmenu { position: relative; display: inline-block; }
+.fmenu-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; transition: border-color .18s, background .18s;
+}
+.fmenu-btn:hover { border-color: var(--accent); background: var(--panel2); }
+.fmenu-btn .fmenu-label { color: var(--muted); }
+.fmenu-btn .fmenu-val { font-weight: 600; }
+.fmenu-btn .fmenu-arrow { width: 14px; height: 14px; transition: transform .2s; color: var(--muted); }
+.fmenu.open .fmenu-arrow { transform: rotate(180deg); }
+.fmenu-panel {
+  position: absolute; top: calc(100% + 6px); left: 0; min-width: 170px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 6px; z-index: 60;
+  opacity: 0; visibility: hidden; transform: translateY(-6px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+}
+.fmenu.open .fmenu-panel { opacity: 1; visibility: visible; transform: none; }
+.fmenu-item {
+  display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-radius: 8px;
+  cursor: pointer; font-size: 13px; color: var(--text); transition: background .15s, color .15s;
+  --hi: rgba(99,102,241,.18); --hi-fg: var(--accent);
+}
+.fmenu-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--hi-fg); opacity: .9; }
+.fmenu-item:hover { background: var(--hi); color: var(--hi-fg); }
+.fmenu-item.active { background: var(--hi); color: var(--hi-fg); font-weight: 600; }
 tbody tr { transition: background .14s ease; }
 tbody tr:hover { background: var(--panel2); }
 td.mono, .mono { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 12px; }
@@ -286,17 +314,21 @@ tr.dead-row td { opacity: .45; }
 .prov-chip.on { background: rgba(99,102,241,.15); border-color: rgba(99,102,241,.4); color: var(--accent); }
 .prov-chip.off { color: var(--muted); }
 
-/* 分组弹窗（循序渐进式） */
-.g-steps { display: flex; align-items: center; gap: 4px; margin-bottom: 20px; }
-.g-step { flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 6px; border-radius: 10px; font-size: 12.5px; color: var(--muted); cursor: default; transition: .2s; }
-.g-step .g-step-num {
-  width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
-  background: var(--panel2); border: 1px solid var(--border); font-size: 12px; font-weight: 700; transition: .2s;
+/* 分组弹窗（单弹窗手风琴式） */
+.g-accordion { display: flex; flex-direction: column; gap: 12px; }
+.g-acc-item { border: 1px solid var(--border); border-radius: 13px; overflow: hidden; background: var(--bg-soft); transition: border-color .2s; }
+.g-acc-item.open { border-color: rgba(99,102,241,.45); }
+.g-acc-head {
+  display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer;
+  user-select: none; transition: background .15s;
 }
-.g-step.active { color: var(--text); }
-.g-step.active .g-step-num { background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; color: #fff; }
-.g-step.done .g-step-num { background: var(--green); border-color: transparent; color: #fff; }
-.g-step-panel { animation: viewIn .25s ease; }
+.g-acc-head:hover { background: var(--panel2); }
+.g-acc-head .g-acc-title { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.g-acc-head .g-acc-sub { font-size: 11.5px; color: var(--muted); font-weight: 400; margin-left: 2px; }
+.g-acc-head .g-acc-arrow { margin-left: auto; flex: none; width: 18px; height: 18px; color: var(--muted); transition: transform .25s; }
+.g-acc-item.open .g-acc-arrow { transform: rotate(180deg); color: var(--accent); }
+.g-acc-body { display: none; padding: 2px 16px 16px; border-top: 1px solid var(--border); }
+.g-acc-item.open .g-acc-body { display: block; animation: viewIn .22s ease; }
 .g-region-choice { display: flex; gap: 10px; flex-wrap: wrap; }
 .g-region-choice .region-pill { padding: 10px 18px; font-size: 13px; }
 .g-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -454,12 +486,24 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
             <span style="display:flex;gap:8px;"><button class="btn magnetic" onclick="runHealthCheck()">立即健康检查</button><button class="btn btn-primary magnetic" onclick="openAddProvider()">+ 添加 Provider</button></span></h2>
           <div class="toolbar">
             <input class="search" id="provider-search" placeholder="模糊搜索名称 / 类型..." oninput="renderProviders()">
-            <select class="filter-select" onchange="filterState.providers.type=this.value;renderProviders()">
-              <option value="">全部类型</option><option value="tunnel">tunnel</option><option value="ip_pool">ip_pool</option><option value="sticky">sticky</option><option value="free">free</option>
-            </select>
-            <select class="filter-select" onchange="filterState.providers.status=this.value;renderProviders()">
-              <option value="">全部状态</option><option value="on">启用</option><option value="off">停用</option>
-            </select>
+            <div class="fmenu" data-filter="providers.type">
+              <div class="fmenu-btn"><span class="fmenu-label">类型</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="tunnel" data-label="tunnel" style="--hi:rgba(245,158,11,.18);--hi-fg:#fbbf24;"><span class="dot"></span>tunnel</div>
+                <div class="fmenu-item" data-value="ip_pool" data-label="ip_pool" style="--hi:rgba(59,130,246,.18);--hi-fg:#60a5fa;"><span class="dot"></span>ip_pool</div>
+                <div class="fmenu-item" data-value="sticky" data-label="sticky" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>sticky</div>
+                <div class="fmenu-item" data-value="free" data-label="free" style="--hi:rgba(139,92,246,.18);--hi-fg:#a78bfa;"><span class="dot"></span>free</div>
+              </div>
+            </div>
+            <div class="fmenu" data-filter="providers.status">
+              <div class="fmenu-btn"><span class="fmenu-label">状态</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="on" data-label="启用" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>启用</div>
+                <div class="fmenu-item" data-value="off" data-label="停用" style="--hi:rgba(239,68,68,.18);--hi-fg:#f87171;"><span class="dot"></span>停用</div>
+              </div>
+            </div>
           </div>
           <div class="table-wrap"><table>
             <thead id="provider-thead"></thead>
@@ -474,12 +518,24 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
           <h2><span class="h2-left">代理明细</span>
             <span style="display:flex;gap:8px;align-items:center;">
               <input class="search" id="proxy-search" placeholder="模糊搜索地址 / Provider / 地区..." oninput="renderProxies()">
-              <select class="filter-select" onchange="filterState.proxies.kind=this.value;renderProxies()">
-                <option value="">全部类型</option><option value="tunnel">tunnel</option><option value="ip_pool">ip_pool</option><option value="sticky">sticky</option><option value="free">free</option>
-              </select>
-              <select class="filter-select" onchange="filterState.proxies.status=this.value;renderProxies()">
-                <option value="">全部状态</option><option value="alive">存活</option><option value="dead">失效</option>
-              </select>
+              <div class="fmenu" data-filter="proxies.kind">
+                <div class="fmenu-btn"><span class="fmenu-label">类型</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+                <div class="fmenu-panel">
+                  <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                  <div class="fmenu-item" data-value="tunnel" data-label="tunnel" style="--hi:rgba(245,158,11,.18);--hi-fg:#fbbf24;"><span class="dot"></span>tunnel</div>
+                  <div class="fmenu-item" data-value="ip_pool" data-label="ip_pool" style="--hi:rgba(59,130,246,.18);--hi-fg:#60a5fa;"><span class="dot"></span>ip_pool</div>
+                  <div class="fmenu-item" data-value="sticky" data-label="sticky" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>sticky</div>
+                  <div class="fmenu-item" data-value="free" data-label="free" style="--hi:rgba(139,92,246,.18);--hi-fg:#a78bfa;"><span class="dot"></span>free</div>
+                </div>
+              </div>
+              <div class="fmenu" data-filter="proxies.status">
+                <div class="fmenu-btn"><span class="fmenu-label">状态</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+                <div class="fmenu-panel">
+                  <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                  <div class="fmenu-item" data-value="alive" data-label="存活" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>存活</div>
+                  <div class="fmenu-item" data-value="dead" data-label="失效" style="--hi:rgba(239,68,68,.18);--hi-fg:#f87171;"><span class="dot"></span>失效</div>
+                </div>
+              </div>
               <label class="toggle" title="自动刷新开关"><input type="checkbox" id="proxy-autorefresh" checked onchange="toggleProxyAutoRefresh(this.checked)"><span class="slider"></span></label>
               <span class="refresh-hint" id="proxy-autorefresh-label">自动刷新</span>
             </span></h2>
@@ -498,6 +554,27 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
             <h2 style="margin:0;"><span class="h2-left">调度分组 <span class="refresh-hint">主池存活率跌破阈值自动切备用池</span></span></h2>
             <button class="btn btn-primary magnetic" onclick="openGroupModal()">新增分组</button>
           </div>
+          <div class="toolbar">
+            <input class="search" id="group-search" placeholder="搜索分组名 / 类型..." oninput="renderGroups()">
+            <div class="fmenu" data-filter="groups.type">
+              <div class="fmenu-btn"><span class="fmenu-label">类型</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="static" data-label="static" style="--hi:rgba(59,130,246,.18);--hi-fg:#60a5fa;"><span class="dot"></span>static</div>
+                <div class="fmenu-item" data-value="tunnel" data-label="tunnel" style="--hi:rgba(245,158,11,.18);--hi-fg:#fbbf24;"><span class="dot"></span>tunnel</div>
+                <div class="fmenu-item" data-value="free" data-label="free" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>free</div>
+                <div class="fmenu-item" data-value="high-quality" data-label="high-quality" style="--hi:rgba(139,92,246,.18);--hi-fg:#a78bfa;"><span class="dot"></span>high-quality</div>
+              </div>
+            </div>
+            <div class="fmenu" data-filter="groups.gateway">
+              <div class="fmenu-btn"><span class="fmenu-label">网关</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="on" data-label="已启用" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>已启用</div>
+                <div class="fmenu-item" data-value="off" data-label="未启用" style="--hi:rgba(148,163,184,.18);--hi-fg:#94a3b8;"><span class="dot"></span>未启用</div>
+              </div>
+            </div>
+          </div>
           <div id="groups-container"><div class="empty">加载中...</div></div>
         </div>
       </div>
@@ -507,6 +584,25 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         <div class="card">
           <h2><span class="h2-left">账户列表 <span class="refresh-hint">Token 由系统自动生成用于 API 调用</span></span>
             <button class="btn btn-primary magnetic" onclick="openAccountModal('')">+ 新增账户</button></h2>
+          <div class="toolbar">
+            <input class="search" id="account-search" placeholder="搜索账户名 / 角色..." oninput="renderAccounts()">
+            <div class="fmenu" data-filter="accounts.role">
+              <div class="fmenu-btn"><span class="fmenu-label">角色</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="admin" data-label="管理员" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>管理员</div>
+                <div class="fmenu-item" data-value="user" data-label="用户" style="--hi:rgba(59,130,246,.18);--hi-fg:#60a5fa;"><span class="dot"></span>用户</div>
+              </div>
+            </div>
+            <div class="fmenu" data-filter="accounts.status">
+              <div class="fmenu-btn"><span class="fmenu-label">状态</span><span class="fmenu-val">全部</span><svg class="fmenu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+              <div class="fmenu-panel">
+                <div class="fmenu-item active" data-value="" data-label="全部"><span class="dot"></span>全部</div>
+                <div class="fmenu-item" data-value="on" data-label="启用" style="--hi:rgba(34,197,94,.18);--hi-fg:#4ade80;"><span class="dot"></span>启用</div>
+                <div class="fmenu-item" data-value="off" data-label="停用" style="--hi:rgba(239,68,68,.18);--hi-fg:#f87171;"><span class="dot"></span>停用</div>
+              </div>
+            </div>
+          </div>
           <div class="table-wrap"><table>
             <thead id="account-thead"></thead>
             <tbody id="account-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
@@ -668,63 +764,78 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
 <div class="modal-backdrop" id="group-modal">
   <div class="modal" style="width:840px;">
     <h3 id="group-modal-title">新增分组</h3>
-    <div class="g-steps" id="g-steps">
-      <div class="g-step active" data-gstep="1"><span class="g-step-num">1</span><span>基本信息</span></div>
-      <div class="g-step" data-gstep="2"><span class="g-step-num">2</span><span>主池与占比</span></div>
-      <div class="g-step" data-gstep="3"><span class="g-step-num">3</span><span>备用池（可选）</span></div>
-      <div class="g-step" data-gstep="4"><span class="g-step-num">4</span><span>网关凭证</span></div>
-    </div>
-    <div class="g-step-panel" id="g-panel-1">
-      <div class="gs-block">
-        <div class="gs-title">基本信息</div>
-        <div class="gs-row">
-          <div class="gs-field"><label>名称（唯一）</label><input id="g-name" placeholder="例如 residential"></div>
-          <div class="gs-field"><label>类型</label><select id="g-type"><option value="">默认</option><option value="static">static</option><option value="free">free</option><option value="tunnel">tunnel</option><option value="high-quality">high-quality</option></select></div>
-          <div class="gs-field"><label>主池存活率阈值</label><input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0"></div>
+    <div class="g-accordion">
+      <div class="g-acc-item open">
+        <div class="g-acc-head" onclick="toggleAcc(this)">
+          <span class="badge violet">基础</span>
+          <span class="g-acc-title">基本信息与出口地区</span>
+          <svg class="g-acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+        <div class="g-acc-body">
+          <div class="gs-row">
+            <div class="gs-field"><label>名称（唯一）</label><input id="g-name" placeholder="例如 residential"></div>
+            <div class="gs-field"><label>类型</label><select id="g-type"><option value="">默认</option><option value="static">static</option><option value="free">free</option><option value="tunnel">tunnel</option><option value="high-quality">high-quality</option></select></div>
+            <div class="gs-field"><label>主池存活率阈值</label><input id="g-min-ratio" type="number" step="0.01" min="0" max="1" value="0"></div>
+          </div>
+          <div class="gs-title" style="margin:16px 0 10px;">出口地区</div>
+          <div class="g-region-choice" id="g-region-choice">
+            <label class="region-pill on"><input type="radio" name="g-region" value="" checked> 不限</label>
+            <label class="region-pill"><input type="radio" name="g-region" value="domestic"> 国内 (CN)</label>
+            <label class="region-pill"><input type="radio" name="g-region" value="overseas"> 海外</label>
+          </div>
         </div>
       </div>
-      <div class="gs-block">
-        <div class="gs-title">出口地区</div>
-        <div class="g-region-choice" id="g-region-choice">
-          <label class="region-pill on"><input type="radio" name="g-region" value="" checked> 不限</label>
-          <label class="region-pill"><input type="radio" name="g-region" value="domestic"> 国内 (CN)</label>
-          <label class="region-pill"><input type="radio" name="g-region" value="overseas"> 海外</label>
+      <div class="g-acc-item open">
+        <div class="g-acc-head" onclick="toggleAcc(this)">
+          <span class="badge on">必填</span>
+          <span class="g-acc-title">主池 Provider</span>
+          <span class="g-acc-sub">占比动态计算，人工指定即锁定，其余均分</span>
+          <svg class="g-acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+        <div class="g-acc-body">
+          <div class="g-pool-toolbar">
+            <div class="hint">勾选 Provider 并分配占比</div>
+            <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',false)">清空</button></span>
+          </div>
+          <div class="provider-grid" id="g-primary-pick"></div>
+          <div class="g-weight-summary">占比合计 <b id="g-weight-total">0%</b><span class="bar"><span class="fill" id="g-weight-bar" style="width:0%;"></span></span></div>
         </div>
       </div>
-    </div>
-    <div class="g-step-panel" id="g-panel-2" style="display:none;">
-      <div class="g-pool-toolbar">
-        <div class="gs-title" style="margin:0;">主池 Provider <span style="font-weight:400;color:var(--muted);">（占比动态计算，人工指定即锁定，其余均分）</span></div>
-        <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',false)">清空</button></span>
-      </div>
-      <div class="provider-grid" id="g-primary-pick"></div>
-      <div class="g-weight-summary">占比合计 <b id="g-weight-total">0%</b><span class="bar"><span class="fill" id="g-weight-bar" style="width:0%;"></span></span></div>
-    </div>
-    <div class="g-step-panel" id="g-panel-3" style="display:none;">
-      <div class="g-pool-toolbar">
-        <div class="gs-title" style="margin:0;">备用池 Provider <span style="font-weight:400;color:var(--muted);">（可选；主池不可用时整体启用，占比规则同主池）</span></div>
-        <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',false)">清空</button></span>
-      </div>
-      <div class="provider-grid" id="g-backup-pick"></div>
-      <div class="g-weight-summary">占比合计 <b id="g-backup-total">0%</b><span class="bar"><span class="fill" id="g-backup-bar" style="width:0%;"></span></span></div>
-      <div class="refresh-hint" style="margin-top:10px;">不设置备用池可跳过，直接进入下一步。</div>
-    </div>
-    <div class="g-step-panel" id="g-panel-4" style="display:none;">
-      <div class="gs-block">
-        <div class="gs-title">网关凭证（可选）</div>
-        <div class="gs-row">
-          <div class="gs-field"><label>网关用户名</label><input id="g-username" placeholder="配置后可用 用户名:密码@域名:1024 直连"></div>
-          <div class="gs-field"><label>网关密码</label><input id="g-password" placeholder="可空"></div>
+      <div class="g-acc-item">
+        <div class="g-acc-head" onclick="toggleAcc(this)">
+          <span class="badge neutral">可选</span>
+          <span class="g-acc-title">备用池 Provider</span>
+          <span class="g-acc-sub">主池不可用时整体启用；已选为主池的不会重复出现</span>
+          <svg class="g-acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
         </div>
-        <div class="refresh-hint" style="margin-top:8px;">配置后即可用 <code>用户名:密码@域名</code> 作为 HTTP 代理地址，直接走本组代理。</div>
+        <div class="g-acc-body">
+          <div class="g-pool-toolbar">
+            <div class="hint">不设置可留空</div>
+            <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',false)">清空</button></span>
+          </div>
+          <div class="provider-grid" id="g-backup-pick"></div>
+          <div class="g-weight-summary">占比合计 <b id="g-backup-total">0%</b><span class="bar"><span class="fill" id="g-backup-bar" style="width:0%;"></span></span></div>
+        </div>
+      </div>
+      <div class="g-acc-item">
+        <div class="g-acc-head" onclick="toggleAcc(this)">
+          <span class="badge kind">可选</span>
+          <span class="g-acc-title">网关凭证</span>
+          <span class="g-acc-sub">配置后可用 用户名:密码@域名 作为 HTTP 代理直连本组</span>
+          <svg class="g-acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+        <div class="g-acc-body">
+          <div class="gs-row">
+            <div class="gs-field"><label>网关用户名</label><input id="g-username" placeholder="可空"></div>
+            <div class="gs-field"><label>网关密码</label><input id="g-password" placeholder="可空"></div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="form-actions">
-      <button class="btn magnetic" id="g-prev" style="display:none;" onclick="groupStep(-1)">上一步</button>
       <span style="flex:1;"></span>
       <button class="btn magnetic" onclick="closeGroupModal()">取消</button>
-      <button class="btn btn-primary magnetic" id="g-next" onclick="groupStep(1)">下一步</button>
-      <button class="btn btn-primary magnetic" id="g-save" style="display:none;" onclick="submitGroup()">保存</button>
+      <button class="btn btn-primary magnetic" onclick="submitGroup()">保存</button>
     </div>
   </div>
 </div>
@@ -765,7 +876,7 @@ let state = { status: null, providers: [], proxies: [], proxyPage: 1, groups: []
 // 各表格的排序状态：key=排序字段, dir=1 升序 / -1 降序
 const sortState = { providers: { key: '', dir: 1 }, proxies: { key: '', dir: 1 }, accounts: { key: '', dir: 1 }, usage: { key: '', dir: 1 }, webhooks: { key: '', dir: 1 } };
 // 各表格的过滤状态
-const filterState = { providers: { type: '', status: '' }, proxies: { kind: '', status: '' } };
+const filterState = { providers: { type: '', status: '' }, proxies: { kind: '', status: '' }, groups: { type: '', gateway: '' }, accounts: { role: '', status: '' } };
 let defaultCheckURLs = [];
 let customCheckURLs = [];
 let proxyAutoRefresh = true;
@@ -776,7 +887,6 @@ let editingProviderName = null;
 let editingAccount = null;
 let editingWebhookUrl = null;
 let editingGroup = null;
-let groupStepIndex = 1;
 let poolState = {
   primary: { picked: [], weights: {}, locked: {} },
   backup: { picked: [], weights: {}, locked: {} }
@@ -827,6 +937,27 @@ function sortBy(viewId, arr, getVal) {
 }
 function authHeaders(){ return token ? { 'Authorization': 'Bearer ' + token } : {}; }
 function countryName(c){ return KNOWN_COUNTRY_NAMES[c] || c; }
+// 磁悬浮副菜单：移入自动展开，移出自动收缩；点击项更新过滤并重渲染。
+function initFMenus() {
+  const renderMap = { groups: renderGroups, accounts: renderAccounts, providers: renderProviders, proxies: renderProxies };
+  document.querySelectorAll('.fmenu').forEach(fm => {
+    let hideTimer = null;
+    fm.addEventListener('mouseenter', () => { clearTimeout(hideTimer); fm.classList.add('open'); });
+    fm.addEventListener('mouseleave', () => { hideTimer = setTimeout(() => fm.classList.remove('open'), 150); });
+    const [view, field] = (fm.dataset.filter || '').split('.');
+    fm.querySelectorAll('.fmenu-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const val = item.dataset.value || '';
+        if (view && field) filterState[view][field] = val;
+        const valEl = fm.querySelector('.fmenu-val');
+        if (valEl) valEl.textContent = item.dataset.label || item.textContent.trim();
+        fm.querySelectorAll('.fmenu-item').forEach(i => i.classList.toggle('active', (i.dataset.value || '') === val));
+        if (renderMap[view]) renderMap[view]();
+        setTimeout(() => fm.classList.remove('open'), 120);
+      });
+    });
+  });
+}
 
 async function api(path, opts = {}) {
   const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(opts.headers||{}) }, ...opts });
@@ -982,14 +1113,7 @@ async function loadAlerts() {
 async function refreshAll(){ await Promise.allSettled([loadStatus(), loadProviders(), loadProxies(), loadGroups(), loadAccounts(), loadUsage(), loadAlerts()]); }
 
 /* ===== 总览 ===== */
-function countUp(el, target) {
-  if (el._done === target) return;
-  el._done = target;
-  const start = parseInt(el.textContent.replace(/[^0-9-]/g,'')) || 0;
-  const t0 = performance.now(); const dur = 700;
-  function step(t) { const p = Math.min(1, (t - t0)/dur); const e = 1 - Math.pow(1-p, 3); el.textContent = Math.round(start + (target-start)*e); if (p<1) requestAnimationFrame(step); }
-  requestAnimationFrame(step);
-}
+// 指标静默加载：直接渲染数值，不做从 0 开始的动态累加，避免频繁跳动干扰。
 function metricCard(label, id, cls, glow) {
   return `<div class="metric"><div class="label">${label}</div><div class="value ${cls}" id="${id}">0</div><div class="glow" style="background:${glow}"></div></div>`;
 }
@@ -1007,11 +1131,11 @@ function renderDashboardMetrics() {
     metricCard('IP 池型', 'm-ippool', 'violet', 'var(--accent)'),
   ].join('');
   document.getElementById('dashboard-metrics').innerHTML = html;
-  countUp(document.getElementById('m-total'), s.total);
-  countUp(document.getElementById('m-alive'), s.alive);
-  countUp(document.getElementById('m-enabled'), enabled);
-  countUp(document.getElementById('m-tunnel'), tunnel);
-  countUp(document.getElementById('m-ippool'), ippool);
+  document.getElementById('m-total').textContent = s.total;
+  document.getElementById('m-alive').textContent = s.alive;
+  document.getElementById('m-enabled').textContent = enabled;
+  document.getElementById('m-tunnel').textContent = tunnel;
+  document.getElementById('m-ippool').textContent = ippool;
 }
 function renderDashboardProviders() {
   const tb = document.getElementById('dash-provider-tbody');
@@ -1168,7 +1292,18 @@ function changePage(d){ state.proxyPage += d; renderProxies(); }
 function renderGroups() {
   const el = document.getElementById('groups-container');
   if (!state.groups.length) { el.innerHTML = '<div class="empty">未配置调度分组，当前使用优先级模式</div>'; return; }
-  el.innerHTML = state.groups.map((g, gi) => {
+  const q = (document.getElementById('group-search')?.value || '').trim().toLowerCase();
+  const f = filterState.groups;
+  let list = state.groups.filter(g => {
+    if (q && !((g.group || '').toLowerCase().includes(q) || (g.type || '').toLowerCase().includes(q))) return false;
+    if (f.type && (g.type || '') !== f.type) return false;
+    const gwOn = !!(g.username && g.password);
+    if (f.gateway === 'on' && !gwOn) return false;
+    if (f.gateway === 'off' && gwOn) return false;
+    return true;
+  });
+  if (!list.length) { el.innerHTML = '<div class="empty">无匹配的分组</div>'; return; }
+  el.innerHTML = list.map((g, gi) => {
     const gwEnabled = g.username && g.password;
     const owner = g.owner || '';
     const me = (currentMe && currentMe.name) || '';
@@ -1197,7 +1332,6 @@ function renderGroups() {
 }
 function openGroupModal(name) {
   editingGroup = null;
-  groupStepIndex = 1;
   poolState = { primary: { picked: [], weights: {}, locked: {} }, backup: { picked: [], weights: {}, locked: {} } };
   document.getElementById('group-modal-title').textContent = '新增分组';
   ['g-name','g-type','g-username','g-password'].forEach(id => document.getElementById(id).value='');
@@ -1225,7 +1359,6 @@ function openGroupModal(name) {
   }
   renderPoolPick('primary');
   renderPoolPick('backup');
-  goGroupStep(1);
   document.getElementById('group-modal').classList.add('show');
 }
 // 从已有配置填充池选择（含权重归一化与锁定）
@@ -1251,26 +1384,35 @@ function syncRegionChoice() {
     p.classList.toggle('on', r.checked);
   });
 }
-function goGroupStep(step) {
-  groupStepIndex = Math.min(4, Math.max(1, step));
-  document.querySelectorAll('.g-step').forEach(s => {
-    const n = parseInt(s.dataset.gstep);
-    s.classList.toggle('active', n === groupStepIndex);
-    s.classList.toggle('done', n < groupStepIndex);
-  });
-  for (let i = 1; i <= 4; i++) document.getElementById('g-panel-' + i).style.display = (i === groupStepIndex) ? '' : 'none';
-  document.getElementById('g-prev').style.display = groupStepIndex > 1 ? '' : 'none';
-  document.getElementById('g-next').style.display = groupStepIndex < 4 ? '' : 'none';
-  document.getElementById('g-save').style.display = groupStepIndex === 4 ? '' : 'none';
+// 手风琴：点击区块标题折叠/展开其配置区域
+function toggleAcc(headEl) {
+  headEl.parentElement.classList.toggle('open');
 }
-function groupStep(delta) { goGroupStep(groupStepIndex + delta); }
 function renderPoolPick(kind) {
   const ps = poolState[kind];
   const el = document.getElementById(kind === 'primary' ? 'g-primary-pick' : 'g-backup-pick');
   if (!el) return;
-  if (!state.providers.length) { el.innerHTML = '<div class="pool-empty">暂无可用 Provider，请先在「代理平台」添加</div>'; updatePoolSummary(kind); return; }
+  // 备用池候选需排除已被选为主池的 Provider，避免重复/无效选项。
+  const primaryPicked = new Set(poolState.primary.picked);
+  if (kind === 'backup') {
+    const filtered = ps.picked.filter(n => !primaryPicked.has(n));
+    if (filtered.length !== ps.picked.length) {
+      ps.picked = filtered;
+      filtered.forEach(n => { delete ps.weights[n]; delete ps.locked[n]; });
+      rebalancePool('backup');
+    }
+  }
+  const candidates = kind === 'backup'
+    ? state.providers.filter(p => !primaryPicked.has(p.name))
+    : state.providers.slice();
+  if (!candidates.length) {
+    el.innerHTML = kind === 'backup'
+      ? '<div class="pool-empty">没有可用的备用池 Provider（已全部选为主池）</div>'
+      : '<div class="pool-empty">暂无可用 Provider，请先在「代理平台」添加</div>';
+    updatePoolSummary(kind); return;
+  }
   const sel = new Set(ps.picked);
-  const ordered = state.providers.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const ordered = candidates.slice().sort((a, b) => a.name.localeCompare(b.name));
   el.innerHTML = ordered.map(p => {
     const isOn = sel.has(p.name);
     const region = providerRegionLabel(p.countries);
@@ -1290,12 +1432,23 @@ function poolToggle(kind, checked, name) {
   if (checked) { if (!ps.picked.includes(name)) ps.picked.push(name); }
   else { ps.picked = ps.picked.filter(n => n !== name); delete ps.weights[name]; delete ps.locked[name]; }
   rebalancePool(kind); renderPoolPick(kind);
+  // 主池选择变化会改变备用池的候选（排除已选主池），需同步刷新备用池。
+  if (kind === 'primary') { rebalancePool('backup'); renderPoolPick('backup'); }
 }
 function poolToggleAll(kind, on) {
   const ps = poolState[kind];
-  ps.picked = on ? state.providers.map(p => p.name).slice() : [];
+  if (on) {
+    const primaryPicked = new Set(poolState.primary.picked);
+    const candidates = kind === 'backup'
+      ? state.providers.filter(p => !primaryPicked.has(p.name)).map(p => p.name)
+      : state.providers.map(p => p.name);
+    ps.picked = candidates.slice();
+  } else {
+    ps.picked = [];
+  }
   ps.weights = {}; ps.locked = {};
   rebalancePool(kind); renderPoolPick(kind);
+  if (kind === 'primary') { rebalancePool('backup'); renderPoolPick('backup'); }
 }
 function setPoolWeight(kind, input) {
   const name = input.dataset.name; const ps = poolState[kind];
@@ -1373,11 +1526,21 @@ function renderAccounts() {
   const thead = document.getElementById('account-thead');
   if (thead) thead.innerHTML = '<tr>' + thSort('accounts','name','名称') + thSort('accounts','role','角色') + '<th>Token</th><th>可用分组</th>' + thSort('accounts','status','启用') + '<th>操作</th></tr>';
   if (!state.accounts.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">未配置账户（鉴权关闭）</td></tr>'; return; }
-  const list = sortBy('accounts', state.accounts, (a, key) => {
+  const q = (document.getElementById('account-search')?.value || '').trim().toLowerCase();
+  const f = filterState.accounts;
+  let list = state.accounts.filter(a => {
+    if (q && !((a.name || '').toLowerCase().includes(q) || (a.role || '').toLowerCase().includes(q))) return false;
+    if (f.role && a.role !== f.role) return false;
+    if (f.status === 'on' && !a.enabled) return false;
+    if (f.status === 'off' && a.enabled) return false;
+    return true;
+  });
+  list = sortBy('accounts', list, (a, key) => {
     if (key === 'name') return a.name;
     if (key === 'role') return a.role;
     if (key === 'status') return a.enabled ? 1 : 0;
   });
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">无匹配的账户</td></tr>'; return; }
   tb.innerHTML = list.map(a => `<tr>
     <td class="mono"><b>${esc(a.name)}</b></td>
     <td><span class="badge ${a.role==='admin'?'on':'kind'}">${esc(a.role)}</span></td>
@@ -1756,8 +1919,9 @@ document.getElementById('acct-modal').addEventListener('click', e => { if (e.tar
   const authed = await initAuth();
   if (!authed) { location.href = '/login'; return; }
   buildNav();
+  initFMenus();
   refreshAll();
-  setInterval(refreshAll, 3000);
+  setInterval(refreshAll, 60000);
 })();
 </script>
 </body>

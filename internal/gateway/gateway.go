@@ -305,6 +305,11 @@ func (g *Gateway) relayHTTP(w http.ResponseWriter, r *http.Request, group string
 	removeHopHeaders(out.Header)
 	out.Header.Del("Proxy-Authorization")
 	out.Header.Del("Proxy-Connection")
+	// 带上游代理自身的凭证：客户端发给本网关的 Proxy-Authorization 已删除，
+	// 这里换成上游代理的账号密码，否则需要认证的上游会返回 407 被透传。
+	if pr.Username != "" {
+		out.Header.Set("Proxy-Authorization", basicAuth(pr.Username, pr.Password))
+	}
 
 	if err := out.Write(upstream); err != nil {
 		g.logger.Warn("gateway forward failed", "group", group, "proxy", pr.ID, "err", err)
@@ -461,6 +466,9 @@ func (g *Gateway) ForwardPlain(target *url.URL, group string) (int, http.Header,
 		Header: make(http.Header),
 	}
 	out.Header.Set("User-Agent", "proxy-pool-gateway/1.0")
+	if pr.Username != "" {
+		out.Header.Set("Proxy-Authorization", basicAuth(pr.Username, pr.Password))
+	}
 	if err := out.Write(upstream); err != nil {
 		return 0, nil, nil, err
 	}
