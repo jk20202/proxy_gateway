@@ -23,6 +23,10 @@ type Call struct {
 	OK      bool
 }
 
+// retentionDays keeps only the most recent N days of call records. Older rows
+// are pruned periodically so the usage database cannot grow without bound.
+const retentionDays = 30
+
 // Store is a SQLite-backed usage recorder with async batched writes.
 type Store struct {
 	db      *sql.DB
@@ -91,6 +95,8 @@ func Open(cfg config.DBConfig, logger *slog.Logger) (*Store, error) {
 	}
 	s.wg.Add(1)
 	go s.run()
+	// 启动时立即清理一次过期记录，避免历史数据长期占用磁盘。
+	s.prune()
 	return s, nil
 }
 
@@ -115,6 +121,8 @@ func (s *Store) run() {
 	buf := make([]Call, 0, s.batch)
 	ticker := time.NewTicker(s.flush)
 	defer ticker.Stop()
+	pruneTicker := time.NewTicker(24 * time.Hour)
+	defer pruneTicker.Stop()
 	flush := func() {
 		if len(buf) == 0 {
 			return
@@ -145,6 +153,19 @@ func (s *Store) run() {
 			}
 		case <-ticker.C:
 			flush()
+		case <-pruneTicker.C:
+			s.prune()
+		}
+	}
+}
+
+// prune deletes call records older than retentionDays so the usage table stays
+// bounded.
+func (s *Store) prune() {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).UnixMilli()
+	if _, err := s.db.Exec("DELETE FROM calls WHERE ts < ?", cutoff); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("usage store prune failed", "err", err)
 		}
 	}
 }

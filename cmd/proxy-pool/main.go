@@ -174,12 +174,20 @@ func main() {
 
 	// HTTP proxy gateway: forward traffic through a live proxy from the group
 	// matched by `username:password` credentials configured per group.
-	gwMerged := cfg.Server.GatewayListen == "" || cfg.Server.GatewayListen == cfg.Server.Listen
-	attachGateway := func() error {
+	newGateway := func() *gateway.Gateway {
 		gw := gateway.New(mgr.Pool(), func() []config.GroupCfg {
 			return srv.GroupList()
 		}, logger)
-		return srv.AttachGateway(gw)
+		if usageStore != nil {
+			gw.SetOnUse(func(group string) {
+				usageStore.Record(store.Call{Account: group, Group: group, Kind: "gateway", OK: true})
+			})
+		}
+		return gw
+	}
+	gwMerged := cfg.Server.GatewayListen == "" || cfg.Server.GatewayListen == cfg.Server.Listen
+	attachGateway := func() error {
+		return srv.AttachGateway(newGateway())
 	}
 	if gwMerged {
 		if err := attachGateway(); err != nil {
@@ -189,9 +197,7 @@ func main() {
 			logger.Info("proxy gateway merged onto console port", "listen", cfg.Server.Listen)
 		}
 	} else {
-		gw := gateway.New(mgr.Pool(), func() []config.GroupCfg {
-			return srv.GroupList()
-		}, logger)
+		gw := newGateway()
 		if err := srv.AttachGateway(gw); err != nil {
 			logger.Error("failed to attach standalone gateway", "err", err)
 			cancel()

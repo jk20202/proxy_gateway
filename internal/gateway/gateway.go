@@ -47,6 +47,7 @@ type Gateway struct {
 	logger    *slog.Logger
 	credToGrp atomic.Value // map[string]string key "user:pass" -> group name
 	hc        *http.Client
+	onUse     func(group string) // 可选：成功转发后回调，用于用量统计
 }
 
 // New creates a gateway serving the pool with dynamic group credentials.
@@ -74,6 +75,18 @@ func New(p *pool.Pool, groupsSrc GroupSource, logger *slog.Logger) *Gateway {
 // Rebuild refreshes the in-memory credential map from the group source.
 func (g *Gateway) Rebuild() {
 	g.rebuildCreds()
+}
+
+// SetOnUse installs an optional callback invoked after a request is forwarded
+// through an upstream proxy. It is used to record gateway usage statistics.
+func (g *Gateway) SetOnUse(fn func(group string)) {
+	g.onUse = fn
+}
+
+func (g *Gateway) noteUse(group string) {
+	if g.onUse != nil {
+		g.onUse(group)
+	}
 }
 
 func (g *Gateway) rebuildCreds() {
@@ -334,6 +347,7 @@ func (g *Gateway) relayHTTP(w http.ResponseWriter, r *http.Request, group string
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+	g.noteUse(group)
 	return true, false
 }
 
@@ -445,6 +459,7 @@ func (g *Gateway) relayConnect(w http.ResponseWriter, r *http.Request, group str
 		_ = upstream.Close()
 	}()
 	_, _ = io.Copy(client, upstream)
+	g.noteUse(group)
 	return true, false
 }
 

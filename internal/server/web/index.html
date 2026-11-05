@@ -794,11 +794,10 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         </div>
         <div class="g-acc-body">
           <div class="g-pool-toolbar">
-            <div class="hint">勾选 Provider 并分配占比</div>
+            <input class="search" id="g-primary-search" placeholder="搜索 Provider（a-z）..." oninput="renderPoolPick('primary')" style="width:210px;">
             <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('primary',false)">清空</button></span>
           </div>
           <div class="provider-grid" id="g-primary-pick"></div>
-          <div class="g-weight-summary">占比合计 <b id="g-weight-total">0%</b><span class="bar"><span class="fill" id="g-weight-bar" style="width:0%;"></span></span></div>
         </div>
       </div>
       <div class="g-acc-item">
@@ -810,11 +809,10 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
         </div>
         <div class="g-acc-body">
           <div class="g-pool-toolbar">
-            <div class="hint">不设置可留空</div>
+            <input class="search" id="g-backup-search" placeholder="搜索 Provider（a-z）..." oninput="renderPoolPick('backup')" style="width:210px;">
             <span style="display:flex;gap:8px;"><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',true)">全选</button><button class="btn btn-sm magnetic" onclick="poolToggleAll('backup',false)">清空</button></span>
           </div>
           <div class="provider-grid" id="g-backup-pick"></div>
-          <div class="g-weight-summary">占比合计 <b id="g-backup-total">0%</b><span class="bar"><span class="fill" id="g-backup-bar" style="width:0%;"></span></span></div>
         </div>
       </div>
       <div class="g-acc-item">
@@ -862,6 +860,18 @@ code { background: var(--bg-soft); border: 1px solid var(--border); border-radiu
     <div class="form-row"><label>可用分组（逗号分隔，留空=全部）</label><input id="acct-groups" placeholder="residential, static"></div>
     <div class="refresh-hint" style="margin-bottom:8px;">API Token 由系统自动生成，添加后可在账户列表查看。</div>
     <div class="form-actions"><button class="btn magnetic" onclick="closeAccountModal()">取消</button><button class="btn btn-primary magnetic" onclick="submitAccount()">保存</button></div>
+  </div>
+</div>
+
+<!-- 自研确认弹窗（替代原生 confirm/alert，支持回车/空格确认、Esc 取消） -->
+<div class="modal-backdrop" id="confirm-modal">
+  <div class="modal" style="width:430px;">
+    <h3 id="confirm-title">确认操作</h3>
+    <div id="confirm-msg" style="color:var(--muted);font-size:13.5px;line-height:1.7;margin-bottom:6px;"></div>
+    <div class="form-actions">
+      <button class="btn magnetic" id="confirm-cancel" onclick="resolveConfirm(false)">取消</button>
+      <button class="btn btn-danger magnetic" id="confirm-ok" onclick="resolveConfirm(true)">确认</button>
+    </div>
   </div>
 </div>
 
@@ -978,6 +988,42 @@ function toast(msg, isError = false) {
   el.className = 'toast show' + (isError ? ' error' : '');
   clearTimeout(el._t);
   el._t = setTimeout(() => el.className = 'toast', 3000);
+}
+
+/* ===== 自研确认弹窗（Promise 化，支持回车/空格确认、Esc 取消） ===== */
+function confirmDialog({ title, message, danger = true, confirmText = '确认', cancelText = '取消' } = {}) {
+  return new Promise(resolve => {
+    document.getElementById('confirm-title').textContent = title || '确认操作';
+    document.getElementById('confirm-msg').innerHTML = message || '';
+    const ok = document.getElementById('confirm-ok');
+    const cancel = document.getElementById('confirm-cancel');
+    ok.textContent = confirmText;
+    ok.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary') + ' magnetic';
+    cancel.textContent = cancelText;
+    cancel.style.display = '';
+    document.getElementById('confirm-modal').classList.add('show');
+    ok.focus();
+    window._confirmResolve = resolve;
+  });
+}
+function infoDialog(title, message) {
+  return new Promise(resolve => {
+    document.getElementById('confirm-title').textContent = title || '提示';
+    document.getElementById('confirm-msg').innerHTML = message || '';
+    const ok = document.getElementById('confirm-ok');
+    const cancel = document.getElementById('confirm-cancel');
+    ok.textContent = '知道了';
+    ok.className = 'btn btn-primary magnetic';
+    cancel.style.display = 'none';
+    document.getElementById('confirm-modal').classList.add('show');
+    ok.focus();
+    window._confirmResolve = resolve;
+  });
+}
+function resolveConfirm(v) {
+  document.getElementById('confirm-modal').classList.remove('show');
+  const r = window._confirmResolve; window._confirmResolve = null;
+  if (r) r(v);
 }
 
 /* ===== 主题 ===== */
@@ -1402,6 +1448,30 @@ function syncRegionChoice() {
 function toggleAcc(headEl) {
   headEl.parentElement.classList.toggle('open');
 }
+// 当前选中的出口地区（''=不限 / domestic=国内 / overseas=海外）
+function getSelectedRegion() {
+  return (document.querySelector('input[name="g-region"]:checked') || {}).value || '';
+}
+// 判断 provider 是否符合选中的地区过滤（国内=含 CN 代理；海外=含非 CN 代理，含未知）
+function providerMatchesRegion(p, region) {
+  if (!region) return true;
+  const c = p.countries || {};
+  if (region === 'domestic') return (c.CN || 0) > 0;
+  if (region === 'overseas') return Object.entries(c).some(([k, n]) => k !== 'CN' && n > 0);
+  return true;
+}
+// 返回某池当前的候选 provider（已排除主池、地区过滤、搜索过滤）
+function getPoolCandidates(kind) {
+  const primaryPicked = new Set(poolState.primary.picked);
+  let candidates = kind === 'backup'
+    ? state.providers.filter(p => !primaryPicked.has(p.name))
+    : state.providers.slice();
+  const region = getSelectedRegion();
+  candidates = candidates.filter(p => providerMatchesRegion(p, region));
+  const q = (document.getElementById(kind === 'primary' ? 'g-primary-search' : 'g-backup-search')?.value || '').trim().toLowerCase();
+  if (q) candidates = candidates.filter(p => p.name.toLowerCase().includes(q));
+  return candidates;
+}
 function renderPoolPick(kind) {
   const ps = poolState[kind];
   const el = document.getElementById(kind === 'primary' ? 'g-primary-pick' : 'g-backup-pick');
@@ -1416,30 +1486,28 @@ function renderPoolPick(kind) {
       rebalancePool('backup');
     }
   }
-  const candidates = kind === 'backup'
-    ? state.providers.filter(p => !primaryPicked.has(p.name))
-    : state.providers.slice();
+  const candidates = getPoolCandidates(kind);
   if (!candidates.length) {
-    el.innerHTML = kind === 'backup'
-      ? '<div class="pool-empty">没有可用的备用池 Provider（已全部选为主池）</div>'
-      : '<div class="pool-empty">暂无可用 Provider，请先在「代理平台」添加</div>';
-    updatePoolSummary(kind); return;
+    el.innerHTML = '<div class="pool-empty">没有匹配的 Provider</div>';
+    return;
   }
   const sel = new Set(ps.picked);
-  const ordered = candidates.slice().sort((a, b) => a.name.localeCompare(b.name));
+  // 已选中的按权重降序排最前，未选中的按 a-z 排在后。
+  const pickedList = candidates.filter(p => sel.has(p.name)).sort((a, b) => (ps.weights[b.name] || 0) - (ps.weights[a.name] || 0));
+  const unpickedList = candidates.filter(p => !sel.has(p.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const ordered = pickedList.concat(unpickedList);
   el.innerHTML = ordered.map(p => {
     const isOn = sel.has(p.name);
-    const region = providerRegionLabel(p.countries);
-    const wInput = isOn ? `<span class="pc-weight"><span style="font-size:10px;color:var(--muted);">占比</span>${ps.locked[p.name] ? '<span class="pc-lock">锁定</span>' : ''}<input type="number" min="1" max="99" value="${ps.weights[p.name] || 0}" data-name="${esc(p.name)}" onchange="setPoolWeight('${kind}', this)"><span style="font-size:10px;color:var(--muted);">%</span></span>` : '';
+    const regionLabel = providerRegionLabel(p.countries);
+    const wInput = isOn ? `<span class="pc-weight"><span style="font-size:10px;color:var(--muted);">占比</span>${ps.locked[p.name] ? '<span class="pc-lock">锁定</span>' : ''}<input type="number" min="1" max="100" value="${ps.weights[p.name] || 0}" data-name="${esc(p.name)}" onchange="setPoolWeight('${kind}', this)"><span style="font-size:10px;color:var(--muted);">%</span></span>` : '';
     return `<label class="prov-card ${isOn ? 'on' : ''}">
       <input type="checkbox" value="${esc(p.name)}" ${isOn ? 'checked' : ''}>
       <span class="pc-name">${esc(p.name)}</span>
       <span class="pc-count">存活 ${p.alive}/${p.total} · <span class="badge ${p.type === 'tunnel' ? 'tunnel' : (p.type === 'sticky' ? 'on' : 'kind')}" style="font-size:9px;">${esc(p.type)}</span></span>
-      <span class="pc-region">${esc(region)}</span>
+      <span class="pc-region">${esc(regionLabel)}</span>
       ${wInput}
     </label>`;
   }).join('');
-  updatePoolSummary(kind);
 }
 function poolToggle(kind, checked, name) {
   const ps = poolState[kind];
@@ -1452,11 +1520,8 @@ function poolToggle(kind, checked, name) {
 function poolToggleAll(kind, on) {
   const ps = poolState[kind];
   if (on) {
-    const primaryPicked = new Set(poolState.primary.picked);
-    const candidates = kind === 'backup'
-      ? state.providers.filter(p => !primaryPicked.has(p.name)).map(p => p.name)
-      : state.providers.map(p => p.name);
-    ps.picked = candidates.slice();
+    // 只全选当前可见（排除主池 + 地区过滤 + 搜索过滤）的候选，避免选中被过滤掉的代理。
+    ps.picked = getPoolCandidates(kind).map(p => p.name);
   } else {
     ps.picked = [];
   }
@@ -1467,34 +1532,27 @@ function poolToggleAll(kind, on) {
 function setPoolWeight(kind, input) {
   const name = input.dataset.name; const ps = poolState[kind];
   let w = parseInt(input.value);
-  if (!(w >= 1)) w = 1; if (w > 99) w = 99;
+  if (!(w >= 1)) w = 1; if (w > 100) w = 100;
   ps.weights[name] = w; ps.locked[name] = true;
   rebalancePool(kind); renderPoolPick(kind);
 }
+// 占比均分：手动指定（locked）的代理保持其权重，其余被选中的立即均分
+// 剩余（100 - 锁定总和），保证合计恒为 100%，无需人工核对。
 function rebalancePool(kind) {
   const ps = poolState[kind];
-  const picked = ps.picked.slice(); const n = picked.length;
-  if (!n) { updatePoolSummary(kind); return; }
-  if (n === 1) { if (!ps.locked[picked[0]] || !ps.weights[picked[0]]) ps.weights[picked[0]] = 100; updatePoolSummary(kind); return; }
-  const locked = picked.filter(x => ps.locked[x]); let lockedSum = 0;
+  const picked = ps.picked.slice();
+  if (!picked.length) return;
+  const locked = picked.filter(x => ps.locked[x]);
+  let lockedSum = 0;
   locked.forEach(x => lockedSum += ps.weights[x] || 0);
-  const free = picked.filter(x => !ps.locked[x]); let remaining = 100 - lockedSum;
+  const free = picked.filter(x => !ps.locked[x]);
   if (free.length) {
-    if (remaining < free.length) remaining = free.length;
-    const base = Math.floor(remaining / free.length); let rem = remaining - base * free.length;
+    let remaining = 100 - lockedSum;
+    if (remaining < 0) remaining = 0;
+    const base = Math.floor(remaining / free.length);
+    let rem = remaining - base * free.length;
     free.forEach((x, i) => ps.weights[x] = base + (i < rem ? 1 : 0));
   }
-  if (!free.length && lockedSum !== 100) { const last = picked[picked.length - 1]; ps.weights[last] = (ps.weights[last] || 0) + (100 - lockedSum); }
-  updatePoolSummary(kind);
-}
-function updatePoolSummary(kind) {
-  const isPrimary = kind === 'primary';
-  const totalEl = document.getElementById(isPrimary ? 'g-weight-total' : 'g-backup-total');
-  const barEl = document.getElementById(isPrimary ? 'g-weight-bar' : 'g-backup-bar');
-  const ps = poolState[kind];
-  let sum = 0; ps.picked.forEach(n => sum += ps.weights[n] || 0);
-  if (totalEl) { totalEl.textContent = sum + '%'; totalEl.style.color = (ps.picked.length && sum !== 100) ? 'var(--red)' : 'var(--accent)'; }
-  if (barEl) barEl.style.width = Math.min(100, sum) + '%';
 }
 function closeGroupModal(){ document.getElementById('group-modal').classList.remove('show'); }
 async function submitGroup() {
@@ -1502,13 +1560,11 @@ async function submitGroup() {
   if (!name) { toast('分组名称必填', true); return; }
   const pprimary = poolState.primary.picked;
   if (!pprimary.length) { toast('主池至少选择一个 Provider', true); return; }
-  const primary_weights = {}; let wSum = 0;
-  pprimary.forEach(n => { const w = poolState.primary.weights[n] || 0; primary_weights[n] = w; wSum += w; });
-  if (wSum !== 100) { toast('主池占比合计须为 100%，当前 ' + wSum + '%', true); return; }
+  const primary_weights = {};
+  pprimary.forEach(n => { primary_weights[n] = poolState.primary.weights[n] || 0; });
   const pbackup = poolState.backup.picked;
-  const backup_weights = {}; let bSum = 0;
-  pbackup.forEach(n => { const w = poolState.backup.weights[n] || 0; backup_weights[n] = w; bSum += w; });
-  if (pbackup.length && bSum !== 100) { toast('备用池占比合计须为 100%，当前 ' + bSum + '%', true); return; }
+  const backup_weights = {};
+  pbackup.forEach(n => { backup_weights[n] = poolState.backup.weights[n] || 0; });
   const backups = pbackup.length ? [{ name: 'backup', min_alive_ratio: 0, providers: pbackup }] : [];
   let regions = [];
   const rv = (document.querySelector('input[name="g-region"]:checked') || {}).value || '';
@@ -1524,7 +1580,7 @@ async function submitGroup() {
   } catch(e){ toast('保存失败: ' + e.message, true); }
 }
 async function removeGroup(name) {
-  if (!confirm(`确认删除分组「${name}」？`)) return;
+  if (!await confirmDialog({ title: '删除分组', message: `确认删除分组「<b>${esc(name)}</b>」？` })) return;
   try { await api('/api/v1/admin/groups?name='+encodeURIComponent(name), { method:'DELETE' }); toast('分组已删除'); await loadGroups(); }
   catch(e){ toast('删除失败: ' + e.message, true); }
 }
@@ -1589,7 +1645,7 @@ async function submitAccount() {
   } catch(e){ toast('保存失败: ' + e.message, true); }
 }
 async function removeAccount(name) {
-  if (!confirm(`确认删除账户「${name}」？`)) return;
+  if (!await confirmDialog({ title: '删除账户', message: `确认删除账户「<b>${esc(name)}</b>」？` })) return;
   try { await api('/api/v1/admin/accounts?name='+encodeURIComponent(name), { method:'DELETE' }); toast('账户已删除'); await loadAccounts(); }
   catch(e){ toast('删除失败: ' + e.message, true); }
 }
@@ -1602,7 +1658,7 @@ async function toggleAccount(name, enabled) {
 function renderUsage() {
   const tb = document.getElementById('usage-tbody');
   const thead = document.getElementById('usage-thead');
-  if (thead) thead.innerHTML = '<tr>' + thSort('usage','account','账户') + thSort('usage','total','调用次数') + thSort('usage','ok','成功') + '<th>成功率</th></tr>';
+  if (thead) thead.innerHTML = '<tr>' + thSort('usage','account','账户 / 分组') + thSort('usage','total','调用次数') + thSort('usage','ok','成功') + '<th>成功率</th></tr>';
   if (!state.usage.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>'; return; }
   const list = sortBy('usage', state.usage, (u, key) => {
     if (key === 'account') return u.account;
@@ -1651,7 +1707,7 @@ async function saveWebhook() {
   } catch(e){ toast('保存失败: ' + e.message, true); }
 }
 async function removeWebhook(url) {
-  if (!confirm(`确认删除 Webhook「${url}」？`)) return;
+  if (!await confirmDialog({ title: '删除 Webhook', message: `确认删除 Webhook「<b>${esc(url)}</b>」？` })) return;
   try { await api('/api/v1/admin/alerts/webhooks?url='+encodeURIComponent(url), { method:'DELETE' }); toast('Webhook 已删除'); await loadAlerts(); }
   catch(e){ toast('删除失败: ' + e.message, true); }
 }
@@ -1719,12 +1775,12 @@ async function refreshProvider(name) {
   catch(e){ toast('刷新失败: '+e.message, true); refreshAll(); }
 }
 async function removeProvider(name) {
-  if (!confirm(`确认删除 Provider「${name}」？其所有代理将被移除。`)) return;
+  if (!await confirmDialog({ title: '删除 Provider', message: `确认删除 Provider「<b>${esc(name)}</b>」？其所有代理将被移除。` })) return;
   try { await api(`/api/v1/admin/providers/${encodeURIComponent(name)}`, { method:'DELETE' }); toast(`Provider「${name}」已删除`); await refreshAll(); }
   catch(e){ toast('删除失败: '+e.message, true); }
 }
 async function removeProxy(id) {
-  if (!confirm('确认删除该代理？')) return;
+  if (!await confirmDialog({ title: '删除代理', message: '确认删除该代理？' })) return;
   try { await api(`/api/v1/admin/proxies/${encodeURIComponent(id)}`, { method:'DELETE' }); toast('代理已删除'); await refreshAll(); }
   catch(e){ toast('删除失败: '+e.message, true); }
 }
@@ -1733,7 +1789,11 @@ async function runHealthCheck() {
   catch(e){ toast('健康检查失败: '+e.message, true); }
 }
 function showProviderUsage(name) {
-  alert(`取代理接口（需你的账户 Token）：\nGET /api/v1/proxy?group=<你的分组>\n\n或直接走该分组网关：\ncurl -x <网关用户名>:<网关密码>@<域名> <目标URL>`);
+  infoDialog('取代理接口', `<div style="font-size:12.5px;">两种方式取代理：</div>
+    <div style="margin:10px 0 4px;color:var(--text);">1. API 取代理（需账户 Token）</div>
+    <div class="group-gw" style="margin:0 0 10px;"><code>GET /api/v1/proxy?group=&lt;你的分组&gt;</code></div>
+    <div style="margin:0 0 4px;color:var(--text);">2. 直接走分组网关</div>
+    <div class="group-gw" style="margin:0;"><code>curl -x &lt;网关用户名&gt;:&lt;网关密码&gt;@&lt;域名&gt; &lt;目标URL&gt;</code></div>`);
 }
 
 /* ===== Provider 弹窗 ===== */
@@ -1908,10 +1968,17 @@ async function copyText(btn, id) {
 }
 
 /* ===== 事件委托 ===== */
+document.getElementById('confirm-modal').addEventListener('click', e => { if (e.target === document.getElementById('confirm-modal')) resolveConfirm(false); });
+document.addEventListener('keydown', e => {
+  const modal = document.getElementById('confirm-modal');
+  if (!modal.classList.contains('show')) return;
+  if (e.key === 'Escape') { e.preventDefault(); resolveConfirm(false); }
+  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); resolveConfirm(true); }
+});
 document.getElementById('provider-modal').addEventListener('click', e => { if (e.target === document.getElementById('provider-modal')) closeModal(); });
 document.getElementById('group-modal').addEventListener('click', e => { if (e.target === document.getElementById('group-modal')) closeGroupModal(); });
 document.getElementById('group-modal').addEventListener('change', e => {
-  if (e.target.type === 'radio') { syncRegionChoice(); return; }
+  if (e.target.type === 'radio') { syncRegionChoice(); renderPoolPick('primary'); renderPoolPick('backup'); return; }
   if (e.target.type !== 'checkbox') return;
   const card = e.target.closest('.prov-card'); if (card) card.classList.toggle('on', e.target.checked);
   const provCard = e.target.closest('.prov-card');
